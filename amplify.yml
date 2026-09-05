@@ -19,9 +19,11 @@
 #                         例: https://<prefix>.auth.<region>.amazoncognito.com
 #   - COGNITO_CLIENT_ID = CDK CfnOutput の UserPoolClientId
 #
-# SPA ルーティング: 管理者ページはクライアントサイドルート（/admin）です。
-# Amplify コンソールの「書き換えとリダイレクト」で、ファイル以外の全パスを
-# /index.html に 200 で書き換えるルールを設定してください（README 参照）。
+# ルーティング: マルチページ構成のため、公開アプリは /index.html、管理者ページは
+# /admin.html という実体のある静的ファイルとして配信されます。両方とも実ファイル
+# なので、SPA 用の書き換えルール（全パスを /index.html に 200 リライト）は不要です。
+# 管理者ページの URL（origin + '/admin.html'）は、CDK が Cognito に登録済みの
+# コールバック/ログアウト URL と完全一致します。
 version: 1
 frontend:
   phases:

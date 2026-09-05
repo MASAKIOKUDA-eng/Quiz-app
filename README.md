@@ -18,7 +18,7 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
   答えが見えないようになっています。採点はサーバー側 (Lambda) で行います。
 - フロントエンドは **React + Vite + TypeScript の SPA**（`frontend/` 配下の独立した npm
   プロジェクト）で、**Amplify Hosting** が npm ビルドして配信します。
-- **管理者ページ（`/admin` ルート）** から、自作のクイズを登録できます。管理者認証は
+- **管理者ページ（`/admin.html`）** から、自作のクイズを登録できます。管理者認証は
   **Amazon Cognito（Hosted UI）** で行い、書き込み API は JWT オーソライザーで保護しています。
 - 初回の `GET /api/quizzes` 実行時、DynamoDB が空であればデフォルトの AWS 問題を自動投入します。
 
@@ -88,15 +88,15 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
 
 ## 管理者ページと自作クイズの登録フロー
 
-1. Amplify のドメインで `/admin` を開きます（例: `https://main.<appId>.amplifyapp.com/admin`）。
-   これは SPA のクライアントサイドルートです（後述の書き換えルールが必要）。
+1. Amplify のドメインで `/admin.html` を開きます（例: `https://main.<appId>.amplifyapp.com/admin.html`）。
+   これは Vite のマルチページビルドで生成される実体のある静的ファイルです（SPA 書き換えルールは不要）。
 2. 「ログイン」ボタンを押すと Cognito Hosted UI にリダイレクトされ、管理者メールアドレスと
    パスワードでログインします（ユーザーは事前に運用者が作成、後述）。
 3. ログイン後、タイトルと問題（各問 2〜4 個の選択肢、正解を 1 つ指定）を入力して送信します。
 4. 送信は `POST /api/admin/quizzes` に `Authorization: Bearer <id_token>` 付きで行われ、
    JWT オーソライザーの検証を通過すると DynamoDB に保存されます。未認証・権限不足の場合は
    401/403 で拒否されます。
-5. 登録後、トップページ（`/`）の一覧に自作クイズが表示されます。
+5. 登録後、トップページ（`/` または `/index.html`）の一覧に自作クイズが表示されます。
 
 ---
 
@@ -141,8 +141,9 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
    - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain` → `VITE_COGNITO_DOMAIN`
    - `COGNITO_CLIENT_ID` = `UserPoolClientId` → `VITE_COGNITO_CLIENT_ID`
    これらの環境変数名は `amplify.yml` が参照する名前と一致している必要があります。
-   さらに Amplify コンソールの「書き換えとリダイレクト」で、SPA 用にファイル以外の
-   全パスを `/index.html` へ 200 で書き換えるルールを追加します（`/admin` の直接アクセス用）。
+   フロントエンドは Vite のマルチページビルドで、公開アプリ（`/index.html`）と管理者
+   ページ（`/admin.html`）の 2 つを**実体のある静的ファイル**として出力します。どちらも
+   実ファイルなので、**SPA 用の書き換えルール（全パスを `/index.html` にリライト）は不要**です。
    デプロイ後、Amplify が払い出したドメイン（例: `https://main.<appId>.amplifyapp.com`）を控えます。
 
 4. **Amplify ドメインが判明したら CDK スタックを再デプロイする。**
@@ -157,11 +158,10 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
    ```
    これで `https://main.<appId>.amplifyapp.com/admin.html` が Hosted UI の
    `redirect_uri` / `logout_uri` として許可されます。
-   > **注意（SPA ルート化に伴う TODO）**: React SPA では管理者ページはクライアントサイド
-   > ルート `/admin` です。Cognito のコールバック/ログアウト URL は現状 CDK が `/admin.html`
-   > を指すよう設定しているため、`/admin` に合わせるには CDK 側の admin ページパスの更新が
-   > 必要です（フォローアップ）。当面は churn を抑えるため、Amplify の書き換えルールで
-   > `/admin.html` も `/index.html` に解決させる運用も可能です。
+   > **補足**: React フロントエンドは Vite の**マルチページ**構成で、管理者ページは
+   > 実体のある静的ファイル `/admin.html` として配信されます。そのため管理者ページ自身の
+   > URL（origin + `/admin.html`）は、CDK が Cognito に登録済みのコールバック/ログアウト
+   > URL と**完全一致**します。**CDK の変更も Amplify の SPA 書き換えルールも不要**です。
 
 5. **（任意・推奨）CORS の許可オリジンを絞る。**
    `lib/quiz-app-stack.ts` の `corsPreflight.allowOrigins` を実際の Amplify ドメイン
@@ -256,11 +256,10 @@ aws cognito-idp admin-set-user-password \
    - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain` → `VITE_COGNITO_DOMAIN`
      （例: `https://<prefix>.auth.<region>.amazoncognito.com`）
    - `COGNITO_CLIENT_ID` = `UserPoolClientId` → `VITE_COGNITO_CLIENT_ID`
-4. **SPA 書き換えルール**を Amplify コンソールの「書き換えとリダイレクト」に追加します。
-   ファイル以外の全パスを `/index.html` に 200 で書き換えることで、`/admin` などの
-   クライアントサイドルートへ直接アクセスできるようにします（例のソース:
-   `</^[^.]+$|\.(?!(css|gif|ico|jpg|js|png|txt|svg|woff2?|json|map)$)([^.]+$)/>`、
-   ターゲット: `/index.html`、種別: 200 Rewrite）。
+4. **SPA 書き換えルールは不要**です。フロントエンドは Vite の**マルチページ**ビルドで、
+   公開アプリ（`/index.html`）と管理者ページ（`/admin.html`）の 2 つを実体のある静的
+   ファイルとして出力します。どちらも実ファイルなので、Amplify コンソールで「全パスを
+   `/index.html` にリライト」する SPA 用ルールを追加する必要はありません。
 5. デプロイ後、Amplify が払い出したドメイン（例: `https://main.<appId>.amplifyapp.com`）を控えます。
 
 > `frontend/.env` は Amplify のビルドが環境変数から生成します（リポジトリには
@@ -294,7 +293,7 @@ npx cdk deploy \
 
 - Amplify のドメイン（例: `https://main.<appId>.amplifyapp.com`）を開くとクイズアプリが表示されます。
 - クイズを 1 つ選び、回答して採点結果が返ることを確認します（API へのクロスオリジン呼び出しが成功）。
-- `/admin` を開き、Cognito Hosted UI でログイン → クイズを登録できることを確認します。
+- `/admin.html` を開き、Cognito Hosted UI でログイン → クイズを登録できることを確認します。
 - 未ログインの状態で `POST /api/admin/quizzes` を叩くと 401/403 で拒否されることを確認します
   （例: `curl -i -X POST <ApiEndpoint>/api/admin/quizzes -d '{}'`）。
 
@@ -323,10 +322,16 @@ npm run build
 ```
 
 - `VITE_API_BASE` が空の場合は同一オリジンの `/api` が既定になります。
-- 管理者ページはクライアントサイドルート `/admin` です。Cognito の `redirect_uri` /
-  `logout_uri` はこのページ自身の URL（origin + pathname）を使います。ローカルで
-  Hosted UI を試す場合は、CDK 側で dev 用のコールバック URL（localhost）を許可して
-  ください（デプロイ手順の `includeLocalhostCallback` を参照）。
+- フロントエンドは Vite の**マルチページ**構成です。公開アプリは `/`（`index.html`）、
+  管理者ページは `/admin.html` という実体のある静的ファイルとして配信されます
+  （クライアントサイドルーターは使いません。ページ間の遷移は通常の `<a>` リンク）。
+- 管理者ページの Cognito `redirect_uri` / `logout_uri` はこのページ自身の URL
+  （origin + pathname、すなわち `.../admin.html`）を使います。この URL は CDK が Cognito に
+  登録済みのコールバック/ログアウト URL と一致するため、SPA 書き換えルールも CDK 変更も
+  不要です。ローカルで Hosted UI を試す場合は、CDK 側で dev 用のコールバック URL
+  （`http://localhost:8080/admin.html`）を許可してください（デプロイ手順の
+  `includeLocalhostCallback` を参照）。なお Vite 開発サーバーの既定ポートは 5173 のため、
+  localhost で Hosted UI を試す場合はポートの整合にも注意してください。
 
 > 注: 一部のサンドボックス環境では壊れた `NODE_OPTIONS` を回避するため、
 > `npm` コマンドの前に `env -u NODE_OPTIONS` を付ける必要があります
