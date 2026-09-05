@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Replace the placeholder seed quizzes with ORIGINAL AWS-architecture content. Provide at least one quiz with a MINIMUM of 10 questions that test AWS architecture design/implementation knowledge (not trivia). Japanese, multiple-choice, in the existing SeedQuiz/SeedQuestion shape (text, options, answerIndex). This feature is independent of FEAT-002..004 and only touches seed data + related tests.",
+  "status": "completed",
+  "steps": [
+    "Edit lambda/seed-data.ts: keep the SeedQuestion/SeedQuiz interfaces and the exported SAMPLE_QUIZZES array shape unchanged.",
+    "Replace the two placeholder quizzes with original AWS-architecture quizzes. REQUIRED: at least one quiz has >= 10 questions. Recommended: one primary quiz quizId 'aws-architecture' titled something like 'AWS アーキテクチャ設計クイズ' with 12 questions, plus a second focused quiz (e.g. quizId 'aws-serverless' titled 'AWS サーバーレス設計クイズ') with >= 5 questions.",
+    "Questions must test architecture design/implementation reasoning, not one-word service recall. Examples of good topics (write ORIGINAL Japanese questions, do not copy any exam material): choosing DynamoDB on-demand vs provisioned for spiky traffic; why NAT Gateway is avoided for idle cost; when to use SQS vs SNS vs EventBridge; API Gateway HTTP API vs REST API cost/feature trade-offs; Lambda ARM64/Graviton cost; multi-AZ vs single-AZ RDS trade-offs; S3 + CloudFront OAC vs public bucket; choosing Aurora Serverless v2 vs provisioned; designing idempotent Lambda consumers; least-privilege IAM for a Lambda-to-DynamoDB path; VPC endpoint vs NAT for private S3 access; CloudFront cache policy behavior. Each question: a `text` string, 4 `options`, and a correct 0-based `answerIndex`.",
+    "Ensure every answerIndex is within range of its options array (0..options.length-1) and points to the genuinely correct option.",
+    "Keep quizId values URL-safe (lowercase, hyphenated) since they appear in path parameters.",
+    "In test/handler.test.ts, add a new describe block 'SAMPLE_QUIZZES seed data validity' that imports SAMPLE_QUIZZES from '../lambda/seed-data' and asserts: (a) at least one quiz has questions.length >= 10; (b) for every quiz, every question has exactly the fields text/options/answerIndex, options.length >= 2, and Number.isInteger(answerIndex) with 0 <= answerIndex < options.length; (c) all quizId values are unique and match /^[a-z0-9-]+$/. These tests run without AWS.",
+    "Do not change lambda/index.ts seeding logic (it already reads SAMPLE_QUIZZES generically)."
+  ],
+  "acceptance_criteria": [
+    "lambda/seed-data.ts exports SAMPLE_QUIZZES with at least one quiz containing >= 10 questions.",
+    "All questions are original Japanese AWS-architecture design/implementation questions (not generic trivia and not copied exam content).",
+    "Every question conforms to SeedQuestion (text:string, options:string[], answerIndex:number) with answerIndex in range.",
+    "New jest assertions in test/handler.test.ts validate the seed data shape and the >=10 question requirement, and `env -u NODE_OPTIONS npm test` passes on a networked machine.",
+    "lambda/index.ts compiles unchanged against the new seed data (tsc build passes)."
+  ],
+  "verification": [
+    "Read lambda/seed-data.ts and count questions in the largest quiz (>= 10).",
+    "On a networked machine: `env -u NODE_OPTIONS npm run build` (tsc) and `env -u NODE_OPTIONS npm test` both pass, including the new seed-data validity tests.",
+    "In-sandbox feasible check: the file is valid TypeScript syntactically and every answerIndex is < its options.length (reason through it)."
+  ],
+  "blocked_reason": null,
+  "findings": "Rewrote lambda/seed-data.ts with two original Japanese AWS-architecture quizzes: 'aws-architecture' (12 questions, >=10 requirement satisfied) and 'aws-serverless' (6 questions). SeedQuiz/SeedQuestion interfaces and SAMPLE_QUIZZES shape unchanged. Added 'SAMPLE_QUIZZES seed data validity' describe block to test/handler.test.ts. Verified correctness in-sandbox by eval'ing the array literal with a Node script: aws-architecture=12, aws-serverless=6 questions, every answerIndex in [0, options.length-1], every question has exactly {text, options, answerIndex}, all quizIds unique and matching /^[a-z0-9-]+$/. ENV NOTE: `node` must be run with `env -u NODE_OPTIONS` in this sandbox (NODE_OPTIONS preloads a missing /opt/amazon/kiro-agent/proxy-bootstrap.js); the same prefix applies to npm. npm/tsc/jest cannot run in-sandbox (INTEGRATIONS_ONLY, npm registry 403). User must run `env -u NODE_OPTIONS npm run build && env -u NODE_OPTIONS npm test` on a networked machine to fully verify. lambda/index.ts was NOT changed (reads SAMPLE_QUIZZES generically). Committed as bd3bbe4 on feat/cdk-scaffold; not pushed."
+}

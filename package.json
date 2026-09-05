@@ -21,6 +21,8 @@
     "ts-jest": "^29.1.5",
     "@types/jest": "^29.5.12",
     "esbuild": "^0.23.1",
-    "@types/aws-lambda": "^8.10.145"
+    "@types/aws-lambda": "^8.10.145",
+    "@aws-sdk/client-dynamodb": "^3.658.0",
+    "@aws-sdk/lib-dynamodb": "^3.658.0"
   }
 }

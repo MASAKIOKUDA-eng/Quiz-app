@@ -6,10 +6,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
-import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 
 /**
  * QuizAppStack
@@ -18,9 +16,24 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
  *  - DynamoDB single-table, PAY_PER_REQUEST (on-demand => no idle cost).
  *  - A single ARM64 (Graviton) Lambda behind an API Gateway v2 HTTP API
  *    (HTTP API is cheaper than REST API). Lambda scales to zero.
- *  - Static SPA hosted in a private S3 bucket fronted by CloudFront with
- *    Origin Access Control (PRICE_CLASS_100 = cheapest edge footprint).
  *  - No VPC and no NAT gateway, so there is no always-on/idle compute cost.
+ *
+ * Frontend hosting (FEAT-004): the SPA is served by AWS Amplify Hosting
+ * (Hosting/CI-CD only, NOT an Amplify backend), connected to the Git repo
+ * via the Amplify console. The previous private-S3 + CloudFront static
+ * hosting was REMOVED here on purpose:
+ *   1. Amplify Hosting now serves the SPA, so keeping S3 + CloudFront for
+ *      the same job is redundant.
+ *   2. That CloudFront distribution required a distribution-wide
+ *      403/404 -> index.html rewrite for SPA routing, which also clobbered
+ *      the API's legitimate 4xx JSON responses (they came back as
+ *      index.html/200). Dropping CloudFront removes that footgun.
+ * Because the SPA is now served from the Amplify origin and calls the API
+ * cross-origin, the HTTP API CORS config below allows cross-origin calls
+ * (including the Authorization header for the admin route). The Amplify App
+ * is intentionally NOT defined in CDK (that needs @aws-cdk/aws-amplify-alpha
+ * plus a Git token); the operator connects the repo in the Amplify console.
+ * See README.md for the Amplify Hosting setup.
  */
 export class QuizAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -74,15 +87,21 @@ export class QuizAppStack extends cdk.Stack {
 
     const httpApi = new apigwv2.HttpApi(this, 'QuizHttpApi', {
       description: 'Serverless quiz HTTP API',
-      // CORS: the SPA calls the API same-origin through the CloudFront
-      // `/api/*` behavior (see below), so browsers do not normally issue
-      // cross-origin preflights. `allowOrigins: ['*']` is kept as a
-      // conscious trade-off so the API also stays usable directly (e.g.
-      // curl, or a custom domain) for this public, unauthenticated demo
-      // that persists no per-user data. Tighten to the CloudFront domain
-      // if this ever carries private data. Note: the CloudFront domain is
-      // created in this same stack, so referencing it here would introduce
-      // a circular dependency; same-origin routing avoids needing it.
+      // CORS: the SPA is served by Amplify Hosting (a different origin than
+      // this API), so the browser makes CROSS-ORIGIN calls and issues CORS
+      // preflights. We therefore allow:
+      //   - GET/POST/OPTIONS methods (OPTIONS for the preflight itself),
+      //   - both 'content-type' AND 'authorization' headers. The admin route
+      //     (POST /api/admin/quizzes) sends `Authorization: Bearer <jwt>`, so
+      //     'authorization' MUST be in allowHeaders or the preflight fails.
+      // `allowOrigins: ['*']` is kept as a conscious trade-off for this
+      // public, unauthenticated demo (the only authenticated route is the
+      // admin write route, which is additionally protected by the Cognito
+      // JWT authorizer regardless of CORS). SECURITY NOTE: tighten
+      // allowOrigins to the real Amplify domain (e.g.
+      // ['https://main.<appId>.amplifyapp.com']) once it is known - see
+      // README.md. CORS is a browser-side control and does not by itself
+      // authorize the API, but narrowing the origin is good hygiene.
       corsPreflight: {
         allowOrigins: ['*'],
         allowMethods: [
@@ -90,13 +109,134 @@ export class QuizAppStack extends cdk.Stack {
           apigwv2.CorsHttpMethod.POST,
           apigwv2.CorsHttpMethod.OPTIONS,
         ],
-        allowHeaders: ['content-type'],
+        allowHeaders: ['content-type', 'authorization'],
       },
     });
 
-    // Routes are registered under an `/api` prefix so the SPA can reach
-    // them same-origin via the CloudFront `/api/*` cache behavior without
-    // any path rewriting at the edge.
+    // ---------------------------------------------------------------
+    // (c.1) Amazon Cognito: admin authentication for the write API.
+    //
+    //   - A User Pool with sign-in by email. Self sign-up is DISABLED so
+    //     only an operator can create admin users (via the console/CLI:
+    //     `aws cognito-idp admin-create-user ...`). No idle cost.
+    //   - A Hosted UI domain (Cognito prefix domain). The prefix MUST be
+    //     globally unique across all AWS accounts, so it is derived from
+    //     the AWS account id (`quiz-admin-<accountId>`) to keep it stable
+    //     and unique without manual coordination. Override with the
+    //     `cognitoDomainPrefix` CDK context value if the derived name is
+    //     already taken (e.g. `-c cognitoDomainPrefix=my-unique-prefix`).
+    //   - A PUBLIC app client (no client secret) suitable for a browser
+    //     SPA, with the Hosted UI OAuth flows enabled.
+    //
+    //   The admin SPA's base URL is not known at synth time (it becomes an
+    //   Amplify Hosting domain later), so callback/logout URLs are driven
+    //   by the `adminAppBaseUrl` CfnParameter (default http://localhost:8080
+    //   for local testing). Update the app client callback/logout URLs with
+    //   the real Amplify domain after connecting the repo to Amplify.
+    // ---------------------------------------------------------------
+    const adminAppBaseUrl = new cdk.CfnParameter(this, 'adminAppBaseUrl', {
+      type: 'String',
+      default: 'http://localhost:8080',
+      description:
+        'Base URL of the admin SPA (Amplify Hosting domain in production). Used to build the Cognito Hosted UI callback/logout URLs. Update after connecting the repo to Amplify.',
+    });
+
+    const userPool = new cognito.UserPool(this, 'AdminUserPool', {
+      // Only an operator creates admin users; public sign-up is off.
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      standardAttributes: {
+        email: { required: true, mutable: false },
+      },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: false,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // Demo stack: allow the pool to be torn down with the stack.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Hosted UI domain prefix. Must be globally unique; derive from the
+    // account id and allow an override via CDK context.
+    const domainPrefix =
+      (this.node.tryGetContext('cognitoDomainPrefix') as string | undefined) ??
+      `quiz-admin-${cdk.Stack.of(this).account}`;
+
+    userPool.addDomain('AdminUserPoolDomain', {
+      cognitoDomain: { domainPrefix },
+    });
+
+    // Callback/logout URLs: the admin page is served at `/admin.html`.
+    //
+    // The primary entry is derived from the `adminAppBaseUrl` parameter (the
+    // Amplify domain in production). We ALSO trust `http://localhost:8080/admin.html`
+    // by default so a developer can run the SPA locally against the Hosted UI.
+    // That localhost entry must NOT be trusted by a production pool, but
+    // `adminAppBaseUrl` is a CfnParameter whose value is a synth-time token
+    // (`.valueAsString`), so we cannot string-compare it to decide. Instead we
+    // gate the localhost entry behind a plain synth-time CDK context flag,
+    // `includeLocalhostCallback`, which defaults to true for developer
+    // convenience. For production deploys, operators pass
+    // `-c includeLocalhostCallback=false` so the pool does not trust a
+    // localhost redirect target.
+    //
+    // NOTE: values passed via `-c key=value` arrive as the STRING "false",
+    // which is truthy in JS, so we explicitly treat "false"/false as false
+    // (any other value, including the unset default, keeps localhost enabled).
+    const includeLocalhostCallbackCtx = this.node.tryGetContext(
+      'includeLocalhostCallback',
+    );
+    const includeLocalhostCallback =
+      includeLocalhostCallbackCtx !== false &&
+      includeLocalhostCallbackCtx !== 'false';
+
+    const callbackUrls = [`${adminAppBaseUrl.valueAsString}/admin.html`];
+    const logoutUrls = [`${adminAppBaseUrl.valueAsString}/admin.html`];
+    if (includeLocalhostCallback) {
+      callbackUrls.push('http://localhost:8080/admin.html');
+      logoutUrls.push('http://localhost:8080/admin.html');
+    }
+
+    const userPoolClient = userPool.addClient('AdminAppClient', {
+      // Public browser client: NO client secret.
+      generateSecret: false,
+      authFlows: { userSrp: true },
+      oAuth: {
+        flows: {
+          authorizationCodeGrant: true,
+          implicitCodeGrant: true,
+        },
+        scopes: [
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls,
+        logoutUrls,
+      },
+    });
+
+    // JWT authorizer bound to the user pool issuer. The audience is the
+    // app client id. API Gateway validates the JWT before invoking the
+    // Lambda, so the admin handler branch can trust the caller.
+    const issuer = `https://cognito-idp.${cdk.Stack.of(this).region}.amazonaws.com/${userPool.userPoolId}`;
+    const adminJwtAuthorizer = new HttpJwtAuthorizer(
+      'AdminJwtAuthorizer',
+      issuer,
+      {
+        jwtAudience: [userPoolClient.userPoolClientId],
+        identitySource: ['$request.header.Authorization'],
+      },
+    );
+
+    // Routes are registered under an `/api` prefix. The SPA (served from
+    // Amplify Hosting) reaches them cross-origin at
+    // `<ApiEndpoint>/api/...`; CORS above permits those calls.
     httpApi.addRoutes({
       path: '/api/quizzes',
       methods: [apigwv2.HttpMethod.GET],
@@ -113,78 +253,29 @@ export class QuizAppStack extends cdk.Stack {
       integration,
     });
 
+    // Authenticated admin write route: create a quiz. Protected by the
+    // Cognito JWT authorizer; the three routes above stay OPEN.
+    httpApi.addRoutes({
+      path: '/api/admin/quizzes',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: adminJwtAuthorizer,
+    });
+
     // ---------------------------------------------------------------
-    // (d) Static site: private S3 bucket + CloudFront (OAC).
+    // (d) Frontend hosting.
+    //
+    //   The static SPA is hosted by AWS Amplify Hosting, connected to the
+    //   Git repository via the Amplify console (Hosting only, no Amplify
+    //   backend). See README.md and amplify.yml. There is intentionally NO
+    //   S3 + CloudFront frontend hosting here anymore (removed in FEAT-004):
+    //   Amplify serves the SPA, and dropping CloudFront also removes the
+    //   distribution-wide 403/404 -> index.html rewrite that used to clobber
+    //   the API's 4xx JSON responses. The Amplify build injects the runtime
+    //   config (API_BASE / COGNITO_DOMAIN / COGNITO_CLIENT_ID) into
+    //   frontend/config.js from Amplify environment variables set to the
+    //   CfnOutputs below (API_BASE = ApiEndpoint + '/api').
     // ---------------------------------------------------------------
-    const siteBucket = new s3.Bucket(this, 'SiteBucket', {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-    });
-
-    // The HTTP API origin. `httpApi.apiEndpoint` is
-    // `https://<id>.execute-api.<region>.amazonaws.com`; CloudFront needs
-    // just the host, so strip the scheme.
-    const apiDomain = cdk.Fn.select(2, cdk.Fn.split('/', httpApi.apiEndpoint));
-    const apiOrigin = new origins.HttpOrigin(apiDomain, {
-      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-    });
-
-    const distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
-      comment: 'Quiz app static site',
-      defaultRootObject: 'index.html',
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-      defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-      },
-      additionalBehaviors: {
-        // Forward `/api/*` to the HTTP API so the SPA can call the API
-        // same-origin (window.API_BASE = '/api'). No caching, and forward
-        // the query string / needed headers so GET and POST both work.
-        'api/*': {
-          origin: apiOrigin,
-          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-          // Forward everything except the Host header (the origin needs
-          // its own execute-api host, not the CloudFront domain).
-          originRequestPolicy:
-            cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-        },
-      },
-      // SPA routing: send 403/404 back to index.html with a 200 so client
-      // side routing works. NOTE: CloudFront custom error responses are
-      // distribution-wide and cannot be scoped to a single behavior, so a
-      // 4xx from the API would also be rewritten to index.html/200. The
-      // SPA's fetch helper guards against this by verifying the response is
-      // JSON (see frontend/app.js), turning a swallowed HTML body into a
-      // clear error instead of a JSON parse crash.
-      errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-      ],
-    });
-
-    new s3deploy.BucketDeployment(this, 'DeploySite', {
-      sources: [s3deploy.Source.asset(path.join(__dirname, '..', 'frontend'))],
-      destinationBucket: siteBucket,
-      distribution,
-      distributionPaths: ['/*'],
-    });
 
     // ---------------------------------------------------------------
     // (e) Outputs.
@@ -192,15 +283,27 @@ export class QuizAppStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: httpApi.apiEndpoint,
       description:
-        'Base URL of the quiz HTTP API (routes are under /api, e.g. /api/quizzes). The SPA reaches these same-origin via CloudFront /api/*.',
-    });
-    new cdk.CfnOutput(this, 'CloudFrontDomain', {
-      value: `https://${distribution.distributionDomainName}`,
-      description: 'CloudFront domain serving the quiz SPA',
+        'Base URL of the quiz HTTP API (routes are under /api, e.g. /api/quizzes). The Amplify-hosted SPA calls these cross-origin; set the Amplify env var API_BASE to this value + "/api".',
     });
     new cdk.CfnOutput(this, 'TableName', {
       value: table.tableName,
       description: 'DynamoDB table name',
+    });
+
+    // Cognito outputs consumed by the admin SPA and for bootstrapping the
+    // first admin user.
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool id (admin authentication)',
+    });
+    new cdk.CfnOutput(this, 'UserPoolClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito User Pool app client id (public browser client)',
+    });
+    new cdk.CfnOutput(this, 'UserPoolHostedUiDomain', {
+      value: `https://${domainPrefix}.auth.${cdk.Stack.of(this).region}.amazoncognito.com`,
+      description:
+        'Cognito Hosted UI base URL. The admin SPA redirects here for login. The domain prefix must be globally unique.',
     });
   }
 }

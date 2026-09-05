@@ -1,4 +1,10 @@
-import { scoreAnswers, ScoredQuestion, toPublicQuestions } from '../lambda/index';
+import {
+  scoreAnswers,
+  ScoredQuestion,
+  toPublicQuestions,
+  validateAndNormalizeQuizInput,
+} from '../lambda/index';
+import { SAMPLE_QUIZZES } from '../lambda/seed-data';
 
 /**
  * Unit tests for the REAL exported scoring helper from the Lambda source.
@@ -120,5 +126,170 @@ describe('toPublicQuestions (answer stripping)', () => {
 
   test('returns an empty array for an empty quiz', () => {
     expect(toPublicQuestions([])).toEqual([]);
+  });
+});
+
+/**
+ * Tests for the REAL exported `validateAndNormalizeQuizInput` helper used by
+ * the authenticated admin write route (POST /api/admin/quizzes). It is a
+ * pure function (no AWS calls) that validates and normalizes an untrusted
+ * quiz-creation payload.
+ */
+describe('validateAndNormalizeQuizInput', () => {
+  const validInput = {
+    quizId: 'my-quiz',
+    title: '  My Quiz  ',
+    questions: [
+      { text: 'Q1', options: ['a', 'b', 'c'], answerIndex: 2 },
+      { text: 'Q2', options: ['x', 'y'], answerIndex: 0 },
+    ],
+  };
+
+  test('normalizes valid input (trims title/options, keeps quizId)', () => {
+    const result = validateAndNormalizeQuizInput(validInput);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.quiz.quizId).toBe('my-quiz');
+      expect(result.quiz.title).toBe('My Quiz');
+      expect(result.quiz.questions).toHaveLength(2);
+      expect(result.quiz.questions[0]).toEqual({
+        text: 'Q1',
+        options: ['a', 'b', 'c'],
+        answerIndex: 2,
+      });
+    }
+  });
+
+  test('rejects a non-object body', () => {
+    expect(validateAndNormalizeQuizInput(null).ok).toBe(false);
+    expect(validateAndNormalizeQuizInput('nope').ok).toBe(false);
+    expect(validateAndNormalizeQuizInput(42).ok).toBe(false);
+  });
+
+  test('rejects missing or empty title', () => {
+    expect(
+      validateAndNormalizeQuizInput({ questions: validInput.questions }).ok,
+    ).toBe(false);
+    expect(
+      validateAndNormalizeQuizInput({ title: '   ', questions: validInput.questions }).ok,
+    ).toBe(false);
+  });
+
+  test('rejects an empty or missing questions array', () => {
+    expect(validateAndNormalizeQuizInput({ title: 'T', questions: [] }).ok).toBe(
+      false,
+    );
+    expect(validateAndNormalizeQuizInput({ title: 'T' }).ok).toBe(false);
+  });
+
+  test('rejects a question with fewer than 2 options', () => {
+    const result = validateAndNormalizeQuizInput({
+      title: 'T',
+      questions: [{ text: 'Q', options: ['only'], answerIndex: 0 }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects a question with empty option strings', () => {
+    const result = validateAndNormalizeQuizInput({
+      title: 'T',
+      questions: [{ text: 'Q', options: ['a', '  '], answerIndex: 0 }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects an answerIndex out of range', () => {
+    expect(
+      validateAndNormalizeQuizInput({
+        title: 'T',
+        questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: 2 }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateAndNormalizeQuizInput({
+        title: 'T',
+        questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: -1 }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateAndNormalizeQuizInput({
+        title: 'T',
+        questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: 1.5 }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  test('rejects an invalid quizId format', () => {
+    const result = validateAndNormalizeQuizInput({
+      quizId: 'Bad_ID!',
+      title: 'T',
+      questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: 0 }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test('auto-generates a URL-safe quizId when omitted', () => {
+    const result = validateAndNormalizeQuizInput({
+      title: 'Hello World Quiz',
+      questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: 0 }],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.quiz.quizId).toMatch(/^[a-z0-9-]+$/);
+      expect(result.quiz.quizId.length).toBeGreaterThan(0);
+      expect(result.quiz.quizId).toContain('hello-world-quiz');
+    }
+  });
+
+  test('auto-generates a non-empty URL-safe quizId for a non-ASCII title', () => {
+    const result = validateAndNormalizeQuizInput({
+      title: 'アーキテクチャ クイズ',
+      questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: 0 }],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.quiz.quizId).toMatch(/^[a-z0-9-]+$/);
+      expect(result.quiz.quizId.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+/**
+ * Validates the shipped seed data (SAMPLE_QUIZZES) so that a malformed quiz,
+ * an out-of-range answerIndex, a non-URL-safe quizId, or a shrunk primary
+ * quiz would fail the build. These tests run without AWS.
+ */
+describe('SAMPLE_QUIZZES seed data validity', () => {
+  test('at least one quiz has 10 or more questions', () => {
+    const maxQuestions = Math.max(...SAMPLE_QUIZZES.map((q) => q.questions.length));
+    expect(maxQuestions).toBeGreaterThanOrEqual(10);
+  });
+
+  test('every question has valid text/options/answerIndex', () => {
+    for (const quiz of SAMPLE_QUIZZES) {
+      for (const question of quiz.questions) {
+        expect(typeof question.text).toBe('string');
+        expect(question.text.length).toBeGreaterThan(0);
+        expect(Array.isArray(question.options)).toBe(true);
+        expect(question.options.length).toBeGreaterThanOrEqual(2);
+        for (const option of question.options) {
+          expect(typeof option).toBe('string');
+          expect(option.length).toBeGreaterThan(0);
+        }
+        expect(Number.isInteger(question.answerIndex)).toBe(true);
+        expect(question.answerIndex).toBeGreaterThanOrEqual(0);
+        expect(question.answerIndex).toBeLessThan(question.options.length);
+        // Each question carries exactly the SeedQuestion fields.
+        expect(Object.keys(question).sort()).toEqual(['answerIndex', 'options', 'text']);
+      }
+    }
+  });
+
+  test('all quizIds are unique and URL-safe', () => {
+    const quizIds = SAMPLE_QUIZZES.map((q) => q.quizId);
+    expect(new Set(quizIds).size).toBe(quizIds.length);
+    for (const quizId of quizIds) {
+      expect(quizId).toMatch(/^[a-z0-9-]+$/);
+    }
   });
 });

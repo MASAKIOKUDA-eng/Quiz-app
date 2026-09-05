@@ -70,6 +70,126 @@ export function scoreAnswers(
   };
 }
 
+export interface NormalizedQuizQuestion {
+  text: string;
+  options: string[];
+  answerIndex: number;
+}
+
+export interface NormalizedQuiz {
+  quizId: string;
+  title: string;
+  questions: NormalizedQuizQuestion[];
+}
+
+export type ValidateQuizResult =
+  | { ok: true; quiz: NormalizedQuiz }
+  | { ok: false; error: string };
+
+const QUIZ_ID_PATTERN = /^[a-z0-9-]+$/;
+
+/**
+ * Turn an arbitrary title into a URL-safe slug of the shape `[a-z0-9-]+`.
+ * Non-ASCII (e.g. Japanese) characters are dropped, so a title with no
+ * ASCII alphanumerics yields an empty string; callers combine this with a
+ * short suffix and a fallback so the final id is always non-empty.
+ */
+function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Pure validation + normalization for the admin quiz-creation payload.
+ * Contains NO AWS SDK calls so it can be unit-tested in isolation.
+ *
+ * On success returns the normalized quiz with a guaranteed URL-safe
+ * `quizId` (auto-generated from the title plus a short suffix when the
+ * caller does not supply one). On failure returns a human-readable error.
+ */
+export function validateAndNormalizeQuizInput(
+  input: unknown,
+): ValidateQuizResult {
+  if (typeof input !== 'object' || input === null) {
+    return { ok: false, error: 'body must be a JSON object' };
+  }
+  const obj = input as Record<string, unknown>;
+
+  if (typeof obj.title !== 'string' || obj.title.trim().length === 0) {
+    return { ok: false, error: 'title must be a non-empty string' };
+  }
+  const title = obj.title.trim();
+
+  if (!Array.isArray(obj.questions) || obj.questions.length === 0) {
+    return { ok: false, error: 'questions must be a non-empty array' };
+  }
+
+  const questions: NormalizedQuizQuestion[] = [];
+  for (let i = 0; i < obj.questions.length; i++) {
+    const raw = obj.questions[i];
+    if (typeof raw !== 'object' || raw === null) {
+      return { ok: false, error: `question ${i} must be an object` };
+    }
+    const q = raw as Record<string, unknown>;
+
+    if (typeof q.text !== 'string' || q.text.trim().length === 0) {
+      return { ok: false, error: `question ${i} text must be a non-empty string` };
+    }
+
+    if (!Array.isArray(q.options) || q.options.length < 2) {
+      return {
+        ok: false,
+        error: `question ${i} must have at least 2 options`,
+      };
+    }
+    const options: string[] = [];
+    for (const opt of q.options) {
+      if (typeof opt !== 'string' || opt.trim().length === 0) {
+        return {
+          ok: false,
+          error: `question ${i} options must all be non-empty strings`,
+        };
+      }
+      options.push(opt.trim());
+    }
+
+    if (
+      typeof q.answerIndex !== 'number' ||
+      !Number.isInteger(q.answerIndex) ||
+      q.answerIndex < 0 ||
+      q.answerIndex >= options.length
+    ) {
+      return {
+        ok: false,
+        error: `question ${i} answerIndex must be an integer within the options range`,
+      };
+    }
+
+    questions.push({ text: q.text.trim(), options, answerIndex: q.answerIndex });
+  }
+
+  // quizId: use the caller's value if valid, otherwise auto-generate a
+  // URL-safe slug from the title plus a short suffix for uniqueness.
+  let quizId: string;
+  if (obj.quizId !== undefined && obj.quizId !== null && obj.quizId !== '') {
+    if (typeof obj.quizId !== 'string' || !QUIZ_ID_PATTERN.test(obj.quizId)) {
+      return {
+        ok: false,
+        error: 'quizId must match /^[a-z0-9-]+$/',
+      };
+    }
+    quizId = obj.quizId;
+  } else {
+    const base = slugify(title);
+    const suffix = Date.now().toString(36).slice(-6);
+    quizId = base ? `${base}-${suffix}` : `quiz-${suffix}`;
+  }
+
+  return { ok: true, quiz: { quizId, title, questions } };
+}
+
 const JSON_HEADERS = {
   'content-type': 'application/json',
   'access-control-allow-origin': '*',
@@ -104,6 +224,42 @@ interface QuestionItem {
 }
 
 /**
+ * Build the DynamoDB items (META + one QUESTION per question) for a single
+ * quiz using the canonical single-table item shapes. Shared by the seeder
+ * and the admin write route so both stay in sync.
+ */
+function buildQuizItems(quiz: {
+  quizId: string;
+  title: string;
+  questions: { text: string; options: string[]; answerIndex: number }[];
+}): (QuizMetaItem | QuestionItem)[] {
+  const items: (QuizMetaItem | QuestionItem)[] = [];
+  const meta: QuizMetaItem = {
+    pk: `QUIZ#${quiz.quizId}`,
+    sk: 'META',
+    type: 'META',
+    quizId: quiz.quizId,
+    title: quiz.title,
+    questionCount: quiz.questions.length,
+  };
+  items.push(meta);
+
+  quiz.questions.forEach((q, idx) => {
+    items.push({
+      pk: `QUIZ#${quiz.quizId}`,
+      sk: `Q#${idx}`,
+      type: 'QUESTION',
+      quizId: quiz.quizId,
+      n: idx,
+      text: q.text,
+      options: q.options,
+      answerIndex: q.answerIndex,
+    });
+  });
+  return items;
+}
+
+/**
  * Write the sample quizzes to the table. Called on first `GET /api/quizzes`
  * when the table is empty. Idempotent enough for a demo: it simply
  * (re)writes the sample items.
@@ -112,29 +268,9 @@ async function seedSampleData(): Promise<void> {
   const requests: { PutRequest: { Item: QuizMetaItem | QuestionItem } }[] = [];
 
   for (const quiz of SAMPLE_QUIZZES) {
-    const meta: QuizMetaItem = {
-      pk: `QUIZ#${quiz.quizId}`,
-      sk: 'META',
-      type: 'META',
-      quizId: quiz.quizId,
-      title: quiz.title,
-      questionCount: quiz.questions.length,
-    };
-    requests.push({ PutRequest: { Item: meta } });
-
-    quiz.questions.forEach((q, idx) => {
-      const item: QuestionItem = {
-        pk: `QUIZ#${quiz.quizId}`,
-        sk: `Q#${idx}`,
-        type: 'QUESTION',
-        quizId: quiz.quizId,
-        n: idx,
-        text: q.text,
-        options: q.options,
-        answerIndex: q.answerIndex,
-      };
+    for (const item of buildQuizItems(quiz)) {
       requests.push({ PutRequest: { Item: item } });
-    });
+    }
   }
 
   // BatchWrite accepts up to 25 items per request.
@@ -216,6 +352,30 @@ async function getQuizItems(
   return { meta, questions };
 }
 
+/** Persist a new quiz (META + Q#n items) via BatchWrite (<= 25 per call). */
+async function writeQuizItems(quiz: NormalizedQuiz): Promise<void> {
+  const items = buildQuizItems(quiz);
+  const table = tableName();
+  const chunkSize = 25;
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    let requestItems: NonNullable<
+      ConstructorParameters<typeof BatchWriteCommand>[0]['RequestItems']
+    > = { [table]: chunk.map((Item) => ({ PutRequest: { Item } })) };
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await ddb.send(
+        new BatchWriteCommand({ RequestItems: requestItems }),
+      );
+      const unprocessed = res.UnprocessedItems ?? {};
+      if (!unprocessed[table] || unprocessed[table].length === 0) {
+        break;
+      }
+      requestItems = unprocessed;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+}
+
 export const handler = async (
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyResultV2> => {
@@ -279,6 +439,47 @@ export const handler = async (
         score: scored.score,
         total: scored.total,
         results: scored.results,
+      });
+    }
+
+    if (routeKey === 'POST /api/admin/quizzes') {
+      // API Gateway has already validated the Cognito JWT before invoking
+      // this Lambda, so a request reaching this branch is authenticated.
+      // Emit a small audit line with the caller's subject when available.
+      const claims = (
+        event.requestContext as {
+          authorizer?: { jwt?: { claims?: Record<string, unknown> } };
+        }
+      ).authorizer?.jwt?.claims;
+      if (claims) {
+        // eslint-disable-next-line no-console
+        console.log('admin quiz create by', claims.sub ?? claims.username ?? 'unknown');
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = event.body ? JSON.parse(event.body) : {};
+      } catch {
+        return json(400, { message: 'invalid JSON body' });
+      }
+
+      const validated = validateAndNormalizeQuizInput(parsed);
+      if (!validated.ok) {
+        return json(400, { message: validated.error });
+      }
+
+      // Reject a collision with an existing quiz.
+      const existing = await getQuizItems(validated.quiz.quizId);
+      if (existing.meta) {
+        return json(409, { message: 'quiz already exists' });
+      }
+
+      await writeQuizItems(validated.quiz);
+
+      return json(201, {
+        quizId: validated.quiz.quizId,
+        title: validated.quiz.title,
+        questionCount: validated.quiz.questions.length,
       });
     }
 

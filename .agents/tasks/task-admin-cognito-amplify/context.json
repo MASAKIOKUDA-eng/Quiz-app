@@ -1,0 +1,28 @@
+{
+  "project_type": "Cost-minimized fully-serverless AWS quiz application. Infrastructure-as-code with AWS CDK v2 (TypeScript). Single stack. Backend = API Gateway v2 HTTP API -> ARM64 Node.js 22 Lambda -> DynamoDB single-table (on-demand). Frontend = dependency-free vanilla-JS SPA.",
+  "language": "TypeScript (CDK + Lambda), vanilla JavaScript (frontend SPA)",
+  "build_system": "npm scripts. `npm run build` = tsc. CDK app entry cdk.json -> `npx ts-node --prefer-ts-exts bin/quiz-app.ts`. NodejsFunction bundles the Lambda via esbuild (local dep, no Docker) at synth time; @aws-sdk/* is marked external because the Node 22 runtime provides AWS SDK v3.",
+  "test_framework": "jest + ts-jest. Config in jest.config.js, roots=<rootDir>/test, testMatch **/*.test.ts. Two suites: test/quiz-app-stack.test.ts (aws-cdk-lib/assertions Template synth) and test/handler.test.ts (pure-function unit tests importing REAL exports scoreAnswers/toPublicQuestions from lambda/index.ts).",
+  "build_command": "env -u NODE_OPTIONS npm ci && npm run build",
+  "test_command": "env -u NODE_OPTIONS npm test",
+  "verification_instructions": "All of build/test/synth MUST run on the user's networked machine (EC2 host), NOT in-sandbox. Full verification: `env -u NODE_OPTIONS npm ci && npm run build && npm test && npx cdk synth`. The `env -u NODE_OPTIONS` prefix is a sandbox workaround for a broken NODE_OPTIONS; the user's real machine likely does not need it. Amplify Hosting and Cognito Hosted UI are validated by the user in the AWS console after `cdk deploy` (connect the Git repo to Amplify, set env vars, create the first admin user in the Cognito pool).",
+  "snapshot_or_generated_files": "None checked in. tsc output (*.js/*.d.ts under bin/lib/lambda) and cdk.out are gitignored. frontend/** is force-un-ignored so static assets are tracked.",
+  "setup_instructions": "npm ci to install deps. No secrets required for build/synth. Deploy requires AWS credentials + one-time `npx cdk bootstrap`.",
+  "environment_constraints": "INTEGRATIONS_ONLY network in-sandbox: public npm registry returns 403, so npm install / tsc / jest / cdk synth / cdk deploy CANNOT run here. All edits must be correct-by-construction and verified by reading. Feasible in-sandbox checks: JSON validity, `node --check` on plain-JS frontend files, import-resolution reasoning. No Docker daemon. Do NOT attempt real AWS deploys.",
+  "contribution_requirements": "Commit onto existing branch feat/cdk-scaffold (do NOT create a new branch, do NOT push - orchestrator publishes, updating PR #1). Keep cost-minimized/serverless spirit: no VPC/NAT, no provisioned capacity, no always-on/idle-billed resources. Cognito User Pools + API Gateway JWT authorizer add no idle cost; Amplify Hosting has build-minute + hosting cost only.",
+  "key_patterns": "DynamoDB single-table: quiz meta item = {pk:'QUIZ#<quizId>', sk:'META', type:'META', quizId, title, questionCount}; question item = {pk:'QUIZ#<quizId>', sk:'Q#<n>', type:'QUESTION', quizId, n, text, options, answerIndex}. Lambda routes dispatched by event.routeKey string match. Security-critical: answerIndex is stripped via exported pure fn toPublicQuestions before any client response; scoring is exported pure fn scoreAnswers. Handler returns via json(statusCode, body) helper with content-type + CORS headers. Seed data (SAMPLE_QUIZZES) in lambda/seed-data.ts with SeedQuiz/SeedQuestion interfaces; seeded via BatchWrite (chunks of 25) with UnprocessedItems retry on first empty-table GET /api/quizzes. Frontend is vanilla JS, no build step, no framework; app.js has fetchJson with a content-type guard; API_BASE from window.API_BASE (config.js), default '/api'. CDK stack uses aws-cdk-lib L2 constructs; CfnOutputs for ApiEndpoint/CloudFrontDomain/TableName.",
+  "relevant_files": [
+    "lib/quiz-app-stack.ts - the single CDK stack; will add Cognito UserPool+client+domain, HttpJwtAuthorizer on admin routes, adjust/replace S3+CloudFront hosting for Amplify, add CfnOutputs for Cognito IDs and Amplify",
+    "lambda/index.ts - Lambda handler; add authenticated admin write route(s) POST /api/admin/quizzes with validation + persistence, keep public routes open",
+    "lambda/seed-data.ts - REPLACE SAMPLE_QUIZZES with original AWS-architecture quizzes, at least one quiz with >=10 questions, Japanese",
+    "frontend/index.html + app.js + config.js + styles.css - public SPA; update API_BASE wiring for cross-origin Amplify hosting",
+    "frontend/admin.html + admin.js (NEW) - admin page with Cognito Hosted UI login + quiz creation form calling the authenticated write API",
+    "test/quiz-app-stack.test.ts - CDK assertions; update route count, add Cognito/authorizer assertions, adjust hosting assertions",
+    "test/handler.test.ts - pure-function tests; add tests for any new exported pure helpers (e.g. quiz-creation validation/normalization)",
+    "amplify.yml (NEW) - Amplify Hosting build spec for the static frontend",
+    "README.md - Japanese; document new architecture, admin URL, Cognito bootstrapping, Amplify Hosting setup, cross-origin API wiring",
+    "package.json - add any new devDependencies (e.g. @aws-cdk/aws-apigatewayv2-authorizers-alpha is NOT needed; HttpJwtAuthorizer is in aws-cdk-lib/aws-apigatewayv2-authorizers which is stable in 2.156)",
+    "bin/quiz-app.ts - CDK app entry (likely unchanged)"
+  ],
+  "directory_structure": "bin/ = CDK app entry. lib/ = stack definition. lambda/ = handler + seed data (bundled by NodejsFunction). frontend/ = static SPA assets (force-tracked). test/ = jest suites. cdk.json/tsconfig.json/jest.config.js/package.json at root. README.md in Japanese."
+}
