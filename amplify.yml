@@ -1,8 +1,17 @@
 # AWS Amplify Hosting ビルド仕様（Hosting のみ / バックエンドは使わない）
 #
 # フロントエンドは React + Vite + TypeScript の SPA（frontend/ 配下の独立した
-# npm プロジェクト）です。Amplify は frontend/ で npm ビルドを実行し、生成物
+# npm プロジェクト）です。Amplify のモノレポ（サブディレクトリ）形式を使い、
+# appRoot: frontend として全フェーズを frontend/ 配下で実行します。生成物
 # （frontend/dist）を配信します。
+#
+# なぜ applications + appRoot 形式か:
+#   Amplify のビルドでは、単独の `cd frontend` を配列の 1 エントリとして置いても
+#   フェーズをまたいで作業ディレクトリが保持されません。以前の flat な frontend:
+#   形式では preBuild は成功しても build フェーズが再びリポジトリルートから開始し、
+#   最初の `cd frontend` で "No such file or directory" となって失敗していました。
+#   appRoot を指定すると、Amplify が各フェーズを frontend/ 内で実行するため、
+#   .env の生成・install・build・baseDirectory がすべて frontend/ 基準で一貫します。
 #
 # 環境変数の注入: Amplify コンソールに設定した環境変数を、ビルド前処理で
 # frontend/.env に書き出し、Vite が参照する VITE_* にマッピングします。
@@ -25,36 +34,38 @@
 # 管理者ページの URL（origin + '/admin.html'）は、CDK が Cognito に登録済みの
 # コールバック/ログアウト URL と完全一致します。
 version: 1
-frontend:
-  phases:
-    preBuild:
-      commands:
-        # Amplify の環境変数から frontend/.env を生成し、Vite が読む VITE_* に
-        # マッピングする。その後、依存関係をインストールする。
-        - cd frontend
-        - |
-          cat > .env <<EOF
-          VITE_API_BASE=${API_BASE}
-          VITE_COGNITO_DOMAIN=${COGNITO_DOMAIN}
-          VITE_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
-          EOF
-        - echo "Generated frontend/.env:"
-        - cat .env
-        - npm ci || npm install
-    build:
-      commands:
-        - cd frontend
-        - npm run build
-  artifacts:
-    # Vite のビルド出力（frontend/dist）を配信対象にする。
-    baseDirectory: frontend/dist
-    files:
-      - '**/*'
-  cache:
-    # 依存関係をキャッシュしてビルドを高速化する。再現性は、npm install が生成し
-    # コミットする package-lock.json（frontend/package-lock.json）に依存する点に注意。
-    # lockfile が無いままだと、キャッシュ済み node_modules と npm install の結果が
-    # ビルド間でずれる可能性がある。lockfile をコミットすれば npm ci が使われ、
-    # 依存関係が固定される。
-    paths:
-      - frontend/node_modules/**/*
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            # 全コマンドは appRoot（frontend/）で実行される。Amplify の環境変数から
+            # .env を生成し、Vite が読む VITE_* にマッピングする。その後、依存関係を
+            # インストールする（lockfile 未コミットのため npm ci 失敗時は npm install）。
+            - |
+              cat > .env <<EOF
+              VITE_API_BASE=${API_BASE}
+              VITE_COGNITO_DOMAIN=${COGNITO_DOMAIN}
+              VITE_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
+              EOF
+            - echo "Generated frontend/.env:"
+            - cat .env
+            - npm ci || npm install
+        build:
+          commands:
+            # appRoot（frontend/）で Vite ビルドを実行する。
+            - npm run build
+      artifacts:
+        # Vite のビルド出力（appRoot 基準の dist = frontend/dist）を配信対象にする。
+        baseDirectory: dist
+        files:
+          - '**/*'
+      cache:
+        # 依存関係をキャッシュしてビルドを高速化する。パスは appRoot 基準。
+        # 再現性は、npm install が生成しコミットする package-lock.json に依存する点に
+        # 注意。lockfile が無いままだと、キャッシュ済み node_modules と npm install の
+        # 結果がビルド間でずれる可能性がある。lockfile をコミットすれば npm ci が使われ、
+        # 依存関係が固定される。
+        paths:
+          - node_modules/**/*
