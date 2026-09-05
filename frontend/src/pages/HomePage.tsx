@@ -142,7 +142,11 @@ function QuizList({
   onSelect: (quizId: string) => void;
 }) {
   if (quizzes.length === 0) {
-    return <p className="empty-state">クイズがありません。</p>;
+    return (
+      <p className="empty-state">
+        まだクイズがありません。管理者ページから作成できます。
+      </p>
+    );
   }
   return (
     <ul className="quiz-list">
@@ -275,6 +279,8 @@ function QuizResult({
         正解数: {result.score} / {result.total}
       </p>
 
+      <p className="result-message">{encouragement(percent)}</p>
+
       <ul className="result-detail">
         {(result.results || []).map((r) => {
           const options = optionsByN[r.n];
@@ -310,6 +316,20 @@ function QuizResult({
 }
 
 // ---- ユーティリティ ------------------------------------------------------
+
+// 正解率に応じた励ましメッセージ（表示のみ。採点・スコアには一切影響しない）。
+function encouragement(percent: number): string {
+  if (percent === 100) {
+    return '満点です。お見事！';
+  }
+  if (percent >= 80) {
+    return 'すばらしい成績です。';
+  }
+  if (percent >= 50) {
+    return 'あと少し。もう一度挑戦してみましょう。';
+  }
+  return '復習して再チャレンジしてみましょう。';
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
