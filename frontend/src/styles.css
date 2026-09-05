@@ -141,3 +141,317 @@ a {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+/* --- 空状態 --- */
+.empty-state {
+  text-align: center;
+  color: var(--muted);
+  padding: 2rem 0;
+}
+
+/* --- クイズ一覧（カード） --- */
+.quiz-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.quiz-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.quiz-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+  background: var(--card);
+}
+
+.quiz-card-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.quiz-card-count {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* --- クイズ回答画面 --- */
+.quiz-heading {
+  text-align: center;
+  font-size: 1.3rem;
+  margin: 0.5rem 0 1rem;
+}
+
+.progress {
+  margin-bottom: 1.25rem;
+}
+
+.progress-label {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+  text-align: center;
+}
+
+.progress-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--card-border);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+/* --- 設問 / 選択肢 --- */
+.question {
+  border: 1px solid var(--card-border);
+}
+
+.question legend {
+  font-weight: 600;
+  padding: 0 0.4rem;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.4rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.option:hover {
+  background: var(--hover);
+}
+
+.option input {
+  margin-top: 0.3rem;
+}
+
+.quiz-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+/* --- 結果画面 --- */
+.result {
+  text-align: center;
+}
+
+.score-ring {
+  --percent: 0;
+  width: 160px;
+  height: 160px;
+  margin: 1rem auto 0.5rem;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--primary) calc(var(--percent) * 1%),
+    var(--card-border) 0
+  );
+  display: grid;
+  place-items: center;
+}
+
+.score-ring-inner {
+  width: 122px;
+  height: 122px;
+  border-radius: 50%;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.score-ring-percent {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.score-ring-fraction {
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.score {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 0.5rem 0 1rem;
+}
+
+.result-detail {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  text-align: left;
+}
+
+.result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  border-left: 4px solid transparent;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+}
+
+.result-item.correct {
+  border-left-color: var(--correct);
+}
+
+.result-item.incorrect {
+  border-left-color: var(--incorrect);
+}
+
+.result-item-label {
+  font-weight: 600;
+}
+
+.result-item.correct .result-item-label {
+  color: var(--correct);
+}
+
+.result-item.incorrect .result-item-label {
+  color: var(--incorrect);
+}
+
+.result-item-answer {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* --- 管理者ページ --- */
+.login-view {
+  text-align: center;
+}
+
+.login-view p {
+  margin-top: 0;
+}
+
+.admin-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
+.admin-form {
+  margin: 0;
+}
+
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.admin-field label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.admin-input {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1rem;
+  font-family: inherit;
+  width: 100%;
+}
+
+.admin-input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.admin-question {
+  border: 1px solid var(--card-border);
+}
+
+.admin-question-legend {
+  font-weight: 600;
+  padding: 0 0.4rem;
+}
+
+.admin-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.admin-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.admin-option .option-text {
+  flex: 1;
+}
+
+.admin-question-controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.admin-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.admin-result-heading {
+  color: var(--correct);
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-top: 0;
+}
+
+/* --- レスポンシブ --- */
+@media (max-width: 480px) {
+  .app {
+    padding: 1rem 0.75rem 2.5rem;
+  }
+
+  h1 {
+    font-size: 1.35rem;
+  }
+
+  .quiz-actions .btn,
+  .admin-actions .btn {
+    flex: 1;
+  }
+}
