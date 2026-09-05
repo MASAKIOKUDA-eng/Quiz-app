@@ -1,0 +1,21 @@
+{
+  "task_id": "task-cdk-quiz-app",
+  "task_description": "Build a cost-minimized, fully-serverless AWS quiz application defined as infrastructure-as-code with AWS CDK (TypeScript). Architecture: CloudFront + private S3 for a static SPA frontend, API Gateway HTTP API -> ARM64 Lambda -> DynamoDB (on-demand billing), with no VPC/NAT and no always-on compute so idle cost is near zero. Deliver CDK stack, Lambda handler, minimal frontend, tests, and a Japanese README. Network is blocked in-sandbox (INTEGRATIONS_ONLY, npm 403) so dependency install / synth / deploy are documented post-clone steps and are NOT executed here.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "skipped",
+    "tests": "skipped",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "INTEGRATIONS_ONLY network (npm registry 403) makes npm install / tsc build / jest / cdk synth impossible in-sandbox; these are documented post-clone steps in the README. Feasible in-sandbox checks all pass: package.json/cdk.json/tsconfig.json are valid JSON; all source files exist; frontend config.js and app.js pass `node --check`; every import in bin/lib/lambda resolves to a declared dependency (aws-cdk-lib+submodules, constructs, aws-lambda types) or a runtime-provided external (@aws-sdk/*) or Node builtin (path). Test quality verified by reading: handler.test.ts imports the REAL exported scoreAnswers and toPublicQuestions so it fails if scoring/answer-stripping logic breaks; quiz-app-stack.test.ts synthesizes the real QuizAppStack and asserts the cost/serverless properties (DynamoDB PAY_PER_REQUEST, Lambda arm64, HTTP API, /api-prefixed routes, CloudFront PriceClass_100 + api/* behavior, S3 public-access-blocked). No Dockerfile present. Full verification command for a networked env: `env -u NODE_OPTIONS npm ci && npm run build && npm test && npx cdk synth`."
+  },
+  "review": {
+    "iterations": 2,
+    "final_verdict": "APPROVED",
+    "v1_review": ".agents/tasks/task-cdk-quiz-app/2026-09-05-092839-review.md",
+    "v2_review": ".agents/tasks/task-cdk-quiz-app/2026-09-05-093709-review.md",
+    "summary": "v1 returned NEEDS_CHANGES with 4 issues (frontend/API origin gap, API-error-as-HTML-200, CDK version floor vs OAC helper, wide-open CORS). Coder fixed 1-3 (CloudFront api/* behavior forwarding to HttpOrigin so the SPA works same-origin with no manual config edit; content-type guard in fetchJson; aws-cdk-lib bumped to ^2.156.0), added UnprocessedItems retry to seeding, and added a handler-level test asserting answerIndex never leaks. CORS ['*'] consciously kept with justification. v2 returned APPROVED with only non-blocking notes (Scan-based listQuizzes at demo scale; full build/synth deferred to a networked env)."
+  }
+}
