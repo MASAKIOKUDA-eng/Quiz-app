@@ -1039,6 +1039,15 @@ a:hover {
   margin: 1rem 0;
 }
 
+/* ホスト一時離席中の注意表示（対戦は継続・ホストは再接続で復帰できる）。 */
+.battle-host-away {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+}
+
 /* ライブ順位表。 */
 .battle-scoreboard {
   margin-top: 1.25rem;

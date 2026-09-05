@@ -12,6 +12,7 @@ import {
   toParticipantQuestion,
   scoreSingleAnswer,
   validateJoinInput,
+  validateTokenClaims,
   ROOM_ID_ALPHABET,
   ROOM_ID_LENGTH,
 } from '../lambda/ws';
@@ -592,5 +593,124 @@ describe('validateJoinInput', () => {
     // Contains an ambiguous glyph excluded from the alphabet (0/O/1/I/L).
     expect(validateJoinInput({ name: 'a', roomId: 'ABC01I' }).ok).toBe(false);
     expect(validateJoinInput({ name: 'a', roomId: 123456 }).ok).toBe(false);
+  });
+});
+
+/**
+ * Tests for the REAL exported `validateTokenClaims` helper — the PURE,
+ * signature-free part of host Cognito id-token verification (alg/kid/exp/iss/
+ * aud/token_use/sub). Extracting it lets us unit-test the security-critical
+ * REJECT paths without AWS/JWKS/network (the RS256 signature check stays in the
+ * AWS-touching `verifyHostToken`). `now` is injected for deterministic exp.
+ */
+describe('validateTokenClaims (host token reject paths)', () => {
+  const issuer = 'https://cognito-idp.ap-northeast-1.amazonaws.com/pool';
+  const clientId = 'abc123clientid';
+  const expected = { issuer, clientId };
+  const NOW = 1_700_000_000;
+
+  const goodHeader = { alg: 'RS256', kid: 'key-1' };
+  const goodPayload = {
+    exp: NOW + 3600,
+    iss: issuer,
+    aud: clientId,
+    token_use: 'id',
+    sub: 'user-sub-123',
+  };
+
+  test('accepts a fully valid header + payload and returns sub + kid', () => {
+    const result = validateTokenClaims(goodHeader, goodPayload, expected, NOW);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.sub).toBe('user-sub-123');
+      expect(result.kid).toBe('key-1');
+    }
+  });
+
+  test('rejects a non-RS256 alg (e.g. none/HS256)', () => {
+    expect(
+      validateTokenClaims({ alg: 'none', kid: 'key-1' }, goodPayload, expected, NOW).ok,
+    ).toBe(false);
+    expect(
+      validateTokenClaims({ alg: 'HS256', kid: 'key-1' }, goodPayload, expected, NOW).ok,
+    ).toBe(false);
+  });
+
+  test('rejects a missing or empty kid', () => {
+    expect(validateTokenClaims({ alg: 'RS256' }, goodPayload, expected, NOW).ok).toBe(
+      false,
+    );
+    expect(
+      validateTokenClaims({ alg: 'RS256', kid: '' }, goodPayload, expected, NOW).ok,
+    ).toBe(false);
+  });
+
+  test('rejects an expired token (exp in the past)', () => {
+    const result = validateTokenClaims(
+      goodHeader,
+      { ...goodPayload, exp: NOW - 1 },
+      expected,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('token expired');
+    }
+  });
+
+  test('rejects a missing or non-numeric exp', () => {
+    const { exp: _drop, ...noExp } = goodPayload;
+    expect(validateTokenClaims(goodHeader, noExp, expected, NOW).ok).toBe(false);
+    expect(
+      validateTokenClaims(goodHeader, { ...goodPayload, exp: 'soon' }, expected, NOW).ok,
+    ).toBe(false);
+  });
+
+  test('rejects an issuer mismatch', () => {
+    const result = validateTokenClaims(
+      goodHeader,
+      { ...goodPayload, iss: 'https://evil.example/pool' },
+      expected,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects an audience mismatch (e.g. an access token / wrong client)', () => {
+    const result = validateTokenClaims(
+      goodHeader,
+      { ...goodPayload, aud: 'some-other-client' },
+      expected,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects a missing token_use (tightened: must be exactly "id")', () => {
+    const { token_use: _drop, ...noUse } = goodPayload;
+    const result = validateTokenClaims(goodHeader, noUse, expected, NOW);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('token_use must be id');
+    }
+  });
+
+  test('rejects a non-"id" token_use (e.g. an access token)', () => {
+    expect(
+      validateTokenClaims(
+        goodHeader,
+        { ...goodPayload, token_use: 'access' },
+        expected,
+        NOW,
+      ).ok,
+    ).toBe(false);
+  });
+
+  test('rejects a missing or empty sub', () => {
+    const { sub: _drop, ...noSub } = goodPayload;
+    expect(validateTokenClaims(goodHeader, noSub, expected, NOW).ok).toBe(false);
+    expect(
+      validateTokenClaims(goodHeader, { ...goodPayload, sub: '' }, expected, NOW).ok,
+    ).toBe(false);
   });
 });

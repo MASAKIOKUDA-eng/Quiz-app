@@ -386,6 +386,7 @@ export class QuizAppStack extends cdk.Stack {
     // `$request.body.action`).
     for (const action of [
       'createRoom',
+      'reattachRoom',
       'joinRoom',
       'startGame',
       'submitAnswer',

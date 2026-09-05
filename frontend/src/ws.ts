@@ -61,6 +61,9 @@ export interface StateMessage {
   quizTitle: string;
   question: ParticipantQuestion | null;
   scoreboard: ScoreboardEntry[];
+  // ホストが切断中（away）でもルームは保持され、ホストは reattachRoom で復帰できる。
+  // false の間はクライアントで「ホストが一時的に離席中」を表示するために使う。
+  hostConnected: boolean;
 }
 
 /** submitAnswer した参加者本人にのみ送られる正誤結果（answerIndex は含まれない）。 */
@@ -98,6 +101,16 @@ export interface JoinRoomAction {
   roomId: string;
 }
 
+/**
+ * ホスト: 一時切断後に既存ルームへ再接続する（token の sub が hostSub と一致する
+ * 場合のみ許可）。hostConnId を新しい接続に付け替え、ルームの進行状態を維持したまま
+ * 操作を再開する。成功時はサーバーが roomCreated と同形のメッセージを返す。
+ */
+export interface ReattachRoomAction {
+  token: string;
+  roomId: string;
+}
+
 /** ホスト: ゲームを開始する。 */
 export interface StartGameAction {
   token: string;
@@ -127,6 +140,7 @@ export interface EndGameAction {
 /** action 名 -> ペイロード型のマップ。send() の型付けに使う。 */
 export interface OutboundActionMap {
   createRoom: CreateRoomAction;
+  reattachRoom: ReattachRoomAction;
   joinRoom: JoinRoomAction;
   startGame: StartGameAction;
   submitAnswer: SubmitAnswerAction;

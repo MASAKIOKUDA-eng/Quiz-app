@@ -51,6 +51,7 @@ interface LiveState {
   quizTitle: string;
   question: ParticipantQuestion | null;
   scoreboard: ScoreboardEntry[];
+  hostConnected: boolean;
 }
 
 export default function BattlePage({ onBack }: { onBack: () => void }) {
@@ -288,6 +289,12 @@ function HostBattle({ onBack }: { onBack: () => void }) {
   const [live, setLive] = useState<LiveState | null>(null);
 
   const socketRef = useRef<BattleSocket | null>(null);
+  // onOpen（再接続時）から最新値を参照するための ref。既存ルームがあれば
+  // reattachRoom で自動復帰する（ホストの一時切断を致命的にしない）。
+  const roomIdRef = useRef<string | null>(null);
+  const idTokenRef = useRef<string | null>(null);
+  roomIdRef.current = roomId;
+  idTokenRef.current = idToken;
 
   // マウント時にトークンを復元 / ハッシュから取得する（ページ非依存の auth.ts）。
   useEffect(() => {
@@ -338,7 +345,15 @@ function HostBattle({ onBack }: { onBack: () => void }) {
       return;
     }
     const socket = new BattleSocket({
-      onOpen: () => setConnStatus('open'),
+      onOpen: () => {
+        setConnStatus('open');
+        // 既存ルームがある状態で（再）接続できたら reattachRoom で復帰する。
+        const currentRoom = roomIdRef.current;
+        const currentToken = idTokenRef.current;
+        if (currentRoom && currentToken) {
+          socket.send('reattachRoom', { token: currentToken, roomId: currentRoom });
+        }
+      },
       onClose: () => setConnStatus('closed'),
       onError: () => setConnStatus('error'),
       onMessage: (msg) => handleMessage(msg),
@@ -377,6 +392,7 @@ function HostBattle({ onBack }: { onBack: () => void }) {
           quizTitle: msg.quizTitle,
           question: msg.question,
           scoreboard: msg.scoreboard,
+          hostConnected: msg.hostConnected,
         });
         break;
       case 'error':
@@ -633,6 +649,7 @@ function ParticipantBattle({ onBack }: { onBack: () => void }) {
             quizTitle: msg.quizTitle,
             question: msg.question,
             scoreboard: msg.scoreboard,
+            hostConnected: msg.hostConnected,
           };
         });
         break;
@@ -774,6 +791,12 @@ function ParticipantBattle({ onBack }: { onBack: () => void }) {
       {status.message && (
         <p className={status.isError ? 'status error' : 'status'}>
           {status.message}
+        </p>
+      )}
+
+      {live && !live.hostConnected && live.phase !== 'finished' && (
+        <p className="battle-phase-note battle-host-away">
+          ホストが一時的に離席中です。再接続をお待ちください。
         </p>
       )}
 

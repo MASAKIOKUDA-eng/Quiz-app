@@ -169,6 +169,49 @@ export function scoreSingleAnswer(
   );
 }
 
+/**
+ * PURE validation of a decoded JWT header + payload against the expected
+ * Cognito id-token claims. Checks alg (RS256 + a kid), exp (not expired),
+ * iss, aud (the app client id) and token_use === 'id'. Does NOT verify the
+ * signature (that requires the JWKS + node:crypto and stays in the
+ * AWS-touching layer). Returns the `sub` claim on success or a reason on
+ * failure so the security-critical reject paths can be unit-tested without
+ * AWS/network. `now` is injectable for deterministic exp tests.
+ */
+export type ValidateTokenClaimsResult =
+  | { ok: true; sub: string; kid: string }
+  | { ok: false; reason: string };
+
+export function validateTokenClaims(
+  header: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  expected: { issuer: string; clientId: string },
+  now: number = Math.floor(Date.now() / 1000),
+): ValidateTokenClaimsResult {
+  if (header.alg !== 'RS256') {
+    return { ok: false, reason: 'alg must be RS256' };
+  }
+  if (typeof header.kid !== 'string' || header.kid.length === 0) {
+    return { ok: false, reason: 'kid is required' };
+  }
+  if (typeof payload.exp !== 'number' || payload.exp < now) {
+    return { ok: false, reason: 'token expired' };
+  }
+  if (payload.iss !== expected.issuer) {
+    return { ok: false, reason: 'issuer mismatch' };
+  }
+  if (payload.aud !== expected.clientId) {
+    return { ok: false, reason: 'audience mismatch' };
+  }
+  if (payload.token_use !== 'id') {
+    return { ok: false, reason: 'token_use must be id' };
+  }
+  if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
+    return { ok: false, reason: 'sub is required' };
+  }
+  return { ok: true, sub: payload.sub, kid: header.kid };
+}
+
 export type ValidateJoinResult =
   | { ok: true; name: string; roomId: string }
   | { ok: false; error: string };
@@ -324,6 +367,10 @@ async function verifyHostToken(token: unknown): Promise<string | null> {
   const issuer = process.env.COGNITO_ISSUER;
   const clientId = process.env.COGNITO_CLIENT_ID;
   if (!issuer || !clientId) {
+    // Fail closed, but log so a misconfigured deploy is distinguishable from a
+    // genuine auth failure (the caller still sees a generic "unauthorized").
+    // eslint-disable-next-line no-console
+    console.error('verifyHostToken: COGNITO_ISSUER/COGNITO_CLIENT_ID not set');
     return null;
   }
   if (typeof token !== 'string' || token.length === 0) {
@@ -345,23 +392,9 @@ async function verifyHostToken(token: unknown): Promise<string | null> {
     return null;
   }
 
-  if (header.alg !== 'RS256' || typeof header.kid !== 'string') {
-    return null;
-  }
-
-  // Claim checks.
-  const now = Math.floor(Date.now() / 1000);
-  if (typeof payload.exp !== 'number' || payload.exp < now) {
-    return null;
-  }
-  if (payload.iss !== issuer) {
-    return null;
-  }
-  // Cognito id tokens carry `aud` (the app client id) and token_use 'id'.
-  if (payload.aud !== clientId) {
-    return null;
-  }
-  if (payload.token_use !== undefined && payload.token_use !== 'id') {
+  // Pure claim checks (alg/kid/exp/iss/aud/token_use/sub) — unit-tested.
+  const claims = validateTokenClaims(header, payload, { issuer, clientId });
+  if (!claims.ok) {
     return null;
   }
 
@@ -372,7 +405,7 @@ async function verifyHostToken(token: unknown): Promise<string | null> {
   } catch {
     return null;
   }
-  let jwk = keys.find((k) => k.kid === header.kid);
+  let jwk = keys.find((k) => k.kid === claims.kid);
   if (!jwk) {
     // Key rotation: refresh the cache once and retry.
     jwksCache = null;
@@ -381,7 +414,7 @@ async function verifyHostToken(token: unknown): Promise<string | null> {
     } catch {
       return null;
     }
-    jwk = keys.find((k) => k.kid === header.kid);
+    jwk = keys.find((k) => k.kid === claims.kid);
     if (!jwk) {
       return null;
     }
@@ -407,7 +440,7 @@ async function verifyHostToken(token: unknown): Promise<string | null> {
     return null;
   }
 
-  return typeof payload.sub === 'string' ? payload.sub : null;
+  return claims.sub;
 }
 
 // --- DynamoDB access --------------------------------------------------------
@@ -506,6 +539,10 @@ interface RoomStateMessage {
   // Participant-safe question (NO answerIndex). Present only in_question.
   question: ParticipantQuestion | null;
   scoreboard: ScoreboardEntry[];
+  // False while the host is disconnected (away) but the room persists so the
+  // host can reattach. Clients use this to show a "host away" note without
+  // ending the game.
+  hostConnected: boolean;
 }
 
 function mgmtClient(domainName: string, stage: string): ApiGatewayManagementApiClient {
@@ -581,6 +618,7 @@ function buildStateMessage(
     scoreboard: aggregateScoreboard(
       players.map((p) => ({ name: p.name, score: p.score })),
     ),
+    hostConnected: typeof room.hostConnId === 'string' && room.hostConnId.length > 0,
   };
 }
 
@@ -726,6 +764,83 @@ async function handleCreateRoom(
   await broadcastState(ctx.domainName, ctx.stage, roomId);
 }
 
+/**
+ * Host-reconnect / reattach: a re-authenticated host whose token `sub` matches
+ * the room's stored `hostSub` rebinds `hostConnId` to their NEW connection and
+ * re-establishes the host connection + lookup rows, then resumes control of
+ * the existing room (its phase/currentQuestion/scoreboard are preserved). This
+ * is what makes a transient host disconnect recoverable instead of fatal.
+ */
+async function handleReattachRoom(
+  ctx: ActionCtx,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const hostSub = await verifyHostToken(body.token);
+  if (!hostSub) {
+    await sendError(ctx.domainName, ctx.stage, ctx.connectionId, 'unauthorized: valid host token required');
+    return;
+  }
+  const roomId = typeof body.roomId === 'string' ? body.roomId.trim().toUpperCase() : undefined;
+  if (!roomId) {
+    await sendError(ctx.domainName, ctx.stage, ctx.connectionId, 'roomId is required');
+    return;
+  }
+  const room = await getRoom(roomId);
+  if (!room) {
+    await sendError(ctx.domainName, ctx.stage, ctx.connectionId, 'room not found');
+    return;
+  }
+  if (room.hostSub !== hostSub) {
+    await sendError(ctx.domainName, ctx.stage, ctx.connectionId, 'forbidden: not the room host');
+    return;
+  }
+
+  const ttl = ttlEpoch();
+  const connItem: ConnItem = {
+    pk: roomPk(roomId),
+    sk: connSk(ctx.connectionId),
+    type: 'CONN',
+    connectionId: ctx.connectionId,
+    name: '__host__',
+    role: 'host',
+    ttl,
+  };
+  const lookup: ConnLookupItem = {
+    pk: connLookupPk(ctx.connectionId),
+    sk: 'META',
+    type: 'CONN_LOOKUP',
+    roomId,
+    name: '__host__',
+    role: 'host',
+    ttl,
+  };
+
+  await Promise.all([
+    ddb.send(
+      new UpdateCommand({
+        TableName: tableName(),
+        Key: { pk: room.pk, sk: 'META' },
+        UpdateExpression: 'SET hostConnId = :conn',
+        ExpressionAttributeValues: { ':conn': ctx.connectionId },
+      }),
+    ),
+    ddb.send(new PutCommand({ TableName: tableName(), Item: connItem })),
+    ddb.send(new PutCommand({ TableName: tableName(), Item: lookup })),
+  ]);
+
+  // Tell the reattaching host the room context (same shape as roomCreated) so
+  // its UI can restore the control panel, then broadcast the live state.
+  const client = mgmtClient(ctx.domainName, ctx.stage);
+  await postToConnection(client, roomId, ctx.connectionId, {
+    type: 'roomCreated',
+    roomId,
+    quizId: room.quizId,
+    quizTitle: room.quizTitle,
+    questionCount: room.questionCount,
+  });
+  await broadcastState(ctx.domainName, ctx.stage, roomId);
+}
+
 async function handleJoinRoom(
   ctx: ActionCtx,
   body: Record<string, unknown>,
@@ -744,18 +859,6 @@ async function handleJoinRoom(
   }
   if (room.phase !== 'lobby') {
     await sendError(ctx.domainName, ctx.stage, ctx.connectionId, 'game already started');
-    return;
-  }
-
-  // Reject a duplicate display name already taken in this room.
-  const existingPlayer = await ddb.send(
-    new GetCommand({
-      TableName: tableName(),
-      Key: { pk: roomPk(roomId), sk: playerSk(name) },
-    }),
-  );
-  if (existingPlayer.Item) {
-    await sendError(ctx.domainName, ctx.stage, ctx.connectionId, 'name already taken in this room');
     return;
   }
 
@@ -788,10 +891,31 @@ async function handleJoinRoom(
     ttl,
   };
 
+  // Atomically claim the display name: the player Put is conditional on the
+  // row not already existing, so two simultaneous joiners with the same name
+  // cannot both succeed (the loser gets ConditionalCheckFailedException and is
+  // told the name is taken). Write the player row FIRST so a lost race does
+  // not leave orphan connection/lookup rows.
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: tableName(),
+        Item: player,
+        ConditionExpression:
+          'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+      }),
+    );
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+      await sendError(ctx.domainName, ctx.stage, ctx.connectionId, 'name already taken in this room');
+      return;
+    }
+    throw err;
+  }
+
   await Promise.all([
     ddb.send(new PutCommand({ TableName: tableName(), Item: connItem })),
     ddb.send(new PutCommand({ TableName: tableName(), Item: lookup })),
-    ddb.send(new PutCommand({ TableName: tableName(), Item: player })),
   ]);
 
   const client = mgmtClient(ctx.domainName, ctx.stage);
@@ -846,14 +970,30 @@ async function handleStartGame(
   }
   const phase = nextGamePhase('lobby', room.questionCount, -1);
   const currentQuestion = phase === 'in_question' ? 0 : room.currentQuestion;
-  await ddb.send(
-    new UpdateCommand({
-      TableName: tableName(),
-      Key: { pk: room.pk, sk: 'META' },
-      UpdateExpression: 'SET phase = :phase, currentQuestion = :cq',
-      ExpressionAttributeValues: { ':phase': phase, ':cq': currentQuestion },
-    }),
-  );
+  // Guard the transition on the room still being in `lobby`, so a double-fire
+  // (two rapid clicks / two host tabs) no-ops instead of double-advancing.
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: tableName(),
+        Key: { pk: room.pk, sk: 'META' },
+        UpdateExpression: 'SET phase = :phase, currentQuestion = :cq',
+        ConditionExpression: 'phase = :expected',
+        ExpressionAttributeValues: {
+          ':phase': phase,
+          ':cq': currentQuestion,
+          ':expected': 'lobby' as GamePhase,
+        },
+      }),
+    );
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+      // Lost the race: another invocation already advanced. Just re-broadcast.
+      await broadcastState(ctx.domainName, ctx.stage, room.roomId);
+      return;
+    }
+    throw err;
+  }
   await broadcastState(ctx.domainName, ctx.stage, room.roomId);
 }
 
@@ -878,14 +1018,32 @@ async function handleNextQuestion(
     currentQuestion = room.currentQuestion + 1;
   }
 
-  await ddb.send(
-    new UpdateCommand({
-      TableName: tableName(),
-      Key: { pk: room.pk, sk: 'META' },
-      UpdateExpression: 'SET phase = :phase, currentQuestion = :cq',
-      ExpressionAttributeValues: { ':phase': phase, ':cq': currentQuestion },
-    }),
-  );
+  // Guard the transition on BOTH the expected current phase and the current
+  // question index, so a double-fire cannot skip a reveal or an entire
+  // question — a losing racer no-ops (re-broadcast) instead of double-stepping.
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: tableName(),
+        Key: { pk: room.pk, sk: 'META' },
+        UpdateExpression: 'SET phase = :phase, currentQuestion = :cq',
+        ConditionExpression:
+          'phase = :expectedPhase AND currentQuestion = :expectedCq',
+        ExpressionAttributeValues: {
+          ':phase': phase,
+          ':cq': currentQuestion,
+          ':expectedPhase': room.phase,
+          ':expectedCq': room.currentQuestion,
+        },
+      }),
+    );
+  } catch (err) {
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+      await broadcastState(ctx.domainName, ctx.stage, room.roomId);
+      return;
+    }
+    throw err;
+  }
   await broadcastState(ctx.domainName, ctx.stage, room.roomId);
 }
 
@@ -991,21 +1149,57 @@ async function handleDisconnect(ctx: ActionCtx): Promise<void> {
   }
   await removeConnection(lookup.roomId, ctx.connectionId);
 
+  if (lookup.role === 'player') {
+    // Explicit decision: prune the participant's PLAYER# row on disconnect so a
+    // participant who closes their tab does NOT linger on the live scoreboard
+    // as a ghost entry until the 6h TTL. There is no reconnect-by-name resume
+    // for participants (they simply rejoin, which is cheap and unauthenticated),
+    // so persisting the row would only add confusion. Deleting the row also
+    // frees the name so it can be reused. Best-effort: a failure here is
+    // non-fatal (TTL is the backstop).
+    await ddb
+      .send(
+        new DeleteCommand({
+          TableName: tableName(),
+          Key: { pk: roomPk(lookup.roomId), sk: playerSk(lookup.name) },
+        }),
+      )
+      .catch(() => undefined);
+  }
+
   if (lookup.role === 'host') {
-    // Host left: mark the room finished so participants see the game ended.
+    // Host disconnect is NOT treated as immediate game-over: a transient host
+    // network drop (mobile switching networks, laptop sleep) would otherwise
+    // end the session for everyone. Instead we clear hostConnId to mark the
+    // host as "away" and KEEP the room in its current phase. A re-authenticated
+    // host whose token sub matches hostSub can `reattachRoom` to rebind
+    // hostConnId and resume control (see handleReattachRoom). The room still
+    // expires via TTL if the host never returns. Guard the clear on the room
+    // still pointing at THIS connection so a race with a reattach does not
+    // clobber a freshly-bound host connection.
     const room = await getRoom(lookup.roomId);
     if (room && room.phase !== 'finished') {
-      await ddb.send(
-        new UpdateCommand({
-          TableName: tableName(),
-          Key: { pk: room.pk, sk: 'META' },
-          UpdateExpression: 'SET phase = :phase',
-          ExpressionAttributeValues: { ':phase': 'finished' as GamePhase },
-        }),
-      );
+      await ddb
+        .send(
+          new UpdateCommand({
+            TableName: tableName(),
+            Key: { pk: room.pk, sk: 'META' },
+            UpdateExpression: 'SET hostConnId = :empty',
+            ConditionExpression: 'hostConnId = :thisConn',
+            ExpressionAttributeValues: {
+              ':empty': '',
+              ':thisConn': ctx.connectionId,
+            },
+          }),
+        )
+        .catch((err) => {
+          if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') {
+            throw err;
+          }
+        });
     }
   }
-  // Refresh remaining participants' scoreboard/state.
+  // Refresh remaining participants' scoreboard/state (now flagged host-away).
   await broadcastState(ctx.domainName, ctx.stage, lookup.roomId);
 }
 
@@ -1057,6 +1251,9 @@ export const handler = async (
     switch (action) {
       case 'createRoom':
         await handleCreateRoom(ctx, body);
+        break;
+      case 'reattachRoom':
+        await handleReattachRoom(ctx, body);
         break;
       case 'joinRoom':
         await handleJoinRoom(ctx, body);

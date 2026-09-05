@@ -106,6 +106,7 @@ describe('QuizAppStack', () => {
       '$disconnect',
       '$default',
       'createRoom',
+      'reattachRoom',
       'joinRoom',
       'startGame',
       'submitAnswer',

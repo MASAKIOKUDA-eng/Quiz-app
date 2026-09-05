@@ -259,6 +259,24 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
 - **参加者**は**認証不要**です。表示名（1〜40 文字）とルームIDのみで参加します。
   参加者からのメッセージにトークンは含まれません。
 
+### 切断時の挙動（ホストの再接続 / 参加者の退出）
+
+- **ホストの一時切断は致命的ではありません**。ホストの `$disconnect` ではルームを
+  `finished` にはせず、`hostConnId` を空にして「離席中」を示すだけで、ルームの進行状態
+  （フェーズ・現在の設問・スコア）は保持されます。モバイル回線の切り替えや PC のスリープで
+  一時的に切断されても、全員のゲームが終わってしまうことはありません。
+- **ホストの再接続（`reattachRoom`）**: 再ログインしたホストは、トークンの `sub` が
+  ルームの `hostSub` と一致する場合に限り、`reattachRoom` で既存ルームへ復帰できます。
+  `hostConnId` を新しい接続に付け替え、進行状態を維持したまま操作を再開します。フロントの
+  ホスト画面は、WebSocket が（再）接続できたときに保持しているルームIDへ自動で
+  `reattachRoom` を送ります。ホストが戻らない場合でもルームは TTL で自動失効します。
+- ブロードキャストされる `state` メッセージには **`hostConnected`（真偽値）** を含めます。
+  ホスト離席中（`false`）は、参加者画面に「ホストが一時的に離席中です」と表示します。
+- **参加者の切断では PLAYER# 行を削除します**（明示的な設計判断）。タブを閉じた参加者が
+  ライブ順位表に「幽霊エントリ」として TTL（約 6 時間）まで残らないようにするためです。
+  参加者は認証不要で再参加が安価なため、名前ごとの再接続復帰は用意していません。行の削除で
+  同じ表示名の再利用も可能になります。
+
 ### アーキテクチャの追加点（WebSocket + ws Lambda + DynamoDB TTL）
 
 既存の HTTP API 構成に対して、**追加**（additive）でリアルタイム対戦の基盤を足しています。
@@ -271,7 +289,7 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
    ▼
 [API Gateway WebSocket API (v2)]
    │   ├── $connect / $disconnect / $default
-   │   └── createRoom / joinRoom / startGame / submitAnswer / nextQuestion / endGame
+   │   └── createRoom / reattachRoom / joinRoom / startGame / submitAnswer / nextQuestion / endGame
    ▼
 [AWS Lambda（ws.ts / Node.js 22, ARM64 / Graviton）]
    │   ホスト JWT 検証・サーバー採点・状態遷移・全員へブロードキャスト
@@ -280,9 +298,9 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
 ```
 
 - **API Gateway v2 WebSocket API**（新規）: 双方向のリアルタイム通信を担います。ルートは
-  `$connect` / `$disconnect` / `$default` に加え、`createRoom` / `joinRoom` / `startGame` /
-  `submitAnswer` / `nextQuestion` / `endGame` の 6 アクション（JSON ボディの `action`
-  フィールドでルーティング）。ステージ名は `prod`（自動デプロイ）です。
+  `$connect` / `$disconnect` / `$default` に加え、`createRoom` / `reattachRoom` / `joinRoom` /
+  `startGame` / `submitAnswer` / `nextQuestion` / `endGame` の各アクション（JSON ボディの
+  `action` フィールドでルーティング）。ステージ名は `prod`（自動デプロイ）です。
 - **専用の ws Lambda**（新規・`lambda/ws.ts`）: ApiFunction と同じ構成（Node.js 22 /
   ARM64・メモリ 256 MB・タイムアウト 10 秒）です。サーバー権威（server-authoritative）の
   ゲーム状態機械（`lobby` → `in_question` → `between` → …→ `finished`）を実行し、
