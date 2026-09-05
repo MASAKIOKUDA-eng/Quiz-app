@@ -1,7 +1,14 @@
 {
   "task_id": "task-one-by-one-mode",
   "task_description": "Add a one-question-at-a-time (一問一答) answering mode to the public React quiz app, in ADDITION to the existing all-at-once (一括表示) mode, chosen by the user when starting a quiz. Both modes share the SAME selected state and the SAME server-side scoring / result / localStorage-history path (single submitAnswers call, single QuizResult screen, single history.append). The public payload has no answerIndex, so there is NO mid-quiz local grading; correctness is only revealed on the existing result screen. Frontend-only, no new dependencies (react + react-dom only, no router), no lockfile; backend, api.ts contract, amplify.yml, Cognito/auth, and admin page are untouched. Includes CSS using existing design tokens and a short README note. Commit onto branch feat/one-by-one-mode; do not push.",
-  "status": "in_progress",
+  "status": "completed",
   "feature_order": ["FEAT-001", "FEAT-002"],
-  "blocked_reason": null
+  "blocked_reason": null,
+  "verification": {
+    "build": "skipped",
+    "tests": "skipped",
+    "test_quality": "skipped",
+    "docker_build": "skipped",
+    "summary": "INTEGRATIONS_ONLY sandbox: npm install / tsc / vite build / npm run dev cannot run (npm registry 403) and the frontend has no test runner (none may be added). Verified correct-by-construction by reading and by git diff against origin/main: (1) only frontend/src/pages/HomePage.tsx, frontend/src/styles.css, README.md, and task-state files changed - backend (lambda/, lib/, test/), api.ts, history.ts, amplify.yml, Cognito/auth, and admin page are untouched; (2) dependencies remain exactly react + react-dom (only new import is the useRef hook), no react-router, no lockfile; (3) the new one-by-one (一問一答) mode and the existing all-at-once (一括表示) mode share the SAME selected state and the SAME single submit/result/history path (one submitAnswers call, one QuizResult score-ring screen, one history.append inside the async success callback); (4) no mid-quiz local grading - answerIndex is not on PublicQuestion and is used only in QuizResult after server scoring; (5) unanswered = -1 semantics preserved (selectOption never stores -1; navigation only advances; handleSubmit map is mode-agnostic); (6) all new CSS classes (mode-chooser*, one-by-one) are defined in styles.css using existing design tokens with no hardcoded hex, so dark mode + prefers-reduced-motion apply automatically. Semantic review v1 verdict: APPROVED with two non-blocking, intentional UX observations (progress bar counts answered vs position; last-question submit allows unvisited -> -1, consistent with all-at-once). User must run `cd frontend && npm install && npm run build` on a networked host, then redeploy via Amplify to confirm the tsc + vite build and visual result."
+  }
 }
