@@ -348,10 +348,23 @@ a:hover {
   padding: 1.1rem 1.25rem 0.75rem;
 }
 
+/*
+ * legend は既定でフィールドセットの上枠線上に配置されるため、複数行の設問文が
+ * カードの角丸の上枠に重なってはみ出す。float + width:100% で通常のブロック見出し
+ * として card の padding 内に流し込み、後続の選択肢とは clear で確実に分離する。
+ */
 .question legend {
+  display: block;
+  float: left;
+  width: 100%;
   font-weight: 700;
-  padding: 0 0.4rem;
+  padding: 0;
+  margin-bottom: 0.75rem;
   line-height: 1.5;
+}
+
+.question legend + * {
+  clear: both;
 }
 
 .option {
@@ -640,9 +653,21 @@ a:hover {
   padding: 1.1rem 1.25rem 0.9rem;
 }
 
+/*
+ * 設問カードと同様に、legend を通常のブロック見出しとして card の padding 内へ
+ * 流し込み、上枠線との重なりを防ぐ（問題文が長い場合の折り返しにも対応）。
+ */
 .admin-question-legend {
+  display: block;
+  float: left;
+  width: 100%;
   font-weight: 700;
-  padding: 0 0.4rem;
+  padding: 0;
+  margin-bottom: 0.75rem;
+}
+
+.admin-question-legend + * {
+  clear: both;
 }
 
 .admin-options {
