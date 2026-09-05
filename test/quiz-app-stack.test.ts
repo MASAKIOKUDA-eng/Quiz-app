@@ -192,6 +192,29 @@ describe('QuizAppStack', () => {
     });
   });
 
+  test('adminAppBaseUrl parameter rejects a trailing slash at deploy time', () => {
+    // Trailing-slash footgun guard: the callback/logout URLs are built by
+    // concatenating `${adminAppBaseUrl}` with `/admin.html` and `/`, so a
+    // base URL ending in `/` would yield a doubled slash (`//`) that breaks
+    // the exact redirect_uri match and reintroduces redirect_mismatch. Since
+    // `.valueAsString` is a synth-time token (a JS `.replace()` on it is a
+    // no-op), the footgun is closed at the source via the CfnParameter's
+    // AllowedPattern, which CloudFormation validates at deploy time. This
+    // test would FAIL if the AllowedPattern were removed or weakened.
+    const params = template.findParameters('adminAppBaseUrl');
+    expect(Object.keys(params)).toContain('adminAppBaseUrl');
+    const pattern = params.adminAppBaseUrl.AllowedPattern as string;
+    expect(typeof pattern).toBe('string');
+    const re = new RegExp(pattern);
+    // Valid: http(s) origins with NO trailing slash.
+    expect(re.test('http://localhost:8080')).toBe(true);
+    expect(re.test('https://main.d2uwsqpk41y7so.amplifyapp.com')).toBe(true);
+    // Invalid: a trailing slash (the footgun) or a missing scheme.
+    expect(re.test('https://main.d2uwsqpk41y7so.amplifyapp.com/')).toBe(false);
+    expect(re.test('http://localhost:8080/')).toBe(false);
+    expect(re.test('main.d2uwsqpk41y7so.amplifyapp.com')).toBe(false);
+  });
+
   test('defines a JWT authorizer for the admin route', () => {
     template.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
     template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {

@@ -404,6 +404,12 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
    `https://main.<appId>.amplifyapp.com/`（公開アプリ = ホスト、**ルート**）が Hosted UI の
    `redirect_uri` / `logout_uri` として許可されます。ホストは `/index.html` ではなく
    サイトの**ルート**（`origin + '/'`）に戻ります。
+   > **重要**: `adminAppBaseUrl` は**末尾スラッシュなし**のオリジンを指定してください
+   > （`https://main.<appId>.amplifyapp.com` であり、`.../` ではありません）。
+   > コールバック/ログアウト URL は `<base>/admin.html` と `<base>/` を連結して作るため、
+   > 末尾にスラッシュを付けるとルートが `//` になって `redirect_uri` の完全一致が崩れ、
+   > 再び `redirect_mismatch` になります。CDK の `adminAppBaseUrl` パラメータには
+   > 末尾スラッシュを拒否する `AllowedPattern` を設定してあり、デプロイ時に検証されます。
 
    **(2) フロントエンドを再ビルドして Amplify に再デプロイする。**
    `frontend/src/auth.ts` の `publicRedirectUri()` / `adminRedirectUri()` が生成する

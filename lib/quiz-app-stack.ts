@@ -163,8 +163,18 @@ export class QuizAppStack extends cdk.Stack {
     const adminAppBaseUrl = new cdk.CfnParameter(this, 'adminAppBaseUrl', {
       type: 'String',
       default: 'http://localhost:8080',
+      // MUST be an origin with NO trailing slash (e.g.
+      // `https://main.<appId>.amplifyapp.com`, NOT `.../`). The callback/
+      // logout URLs are built by concatenating this value with `/admin.html`
+      // and `/`, so a trailing slash would produce a doubled slash
+      // (`https://host//` and `https://host//admin.html`) that no longer
+      // matches the browser's redirect_uri and reintroduces
+      // redirect_mismatch. The regex below enforces this at deploy time.
+      allowedPattern: '^(https?://)[^\\s]*[^/\\s]$',
+      constraintDescription:
+        'adminAppBaseUrl must be an http(s) origin with NO trailing slash, e.g. https://main.<appId>.amplifyapp.com',
       description:
-        'Base URL of the admin SPA (Amplify Hosting domain in production). Used to build the Cognito Hosted UI callback/logout URLs. Update after connecting the repo to Amplify.',
+        'Base URL (origin) of the admin SPA (Amplify Hosting domain in production), WITHOUT a trailing slash. Used to build the Cognito Hosted UI callback/logout URLs (`<base>/admin.html` and `<base>/`). A trailing slash would break the exact redirect_uri match. Update after connecting the repo to Amplify.',
     });
 
     const userPool = new cognito.UserPool(this, 'AdminUserPool', {
@@ -234,6 +244,14 @@ export class QuizAppStack extends cdk.Stack {
     // adminRedirectUri() ('/admin.html') and publicRedirectUri() ('/')
     // byte-for-byte (scheme, host, path, trailing slash). Cognito requires an
     // EXACT redirect_uri match; any drift produces redirect_mismatch.
+    //
+    // NOTE on trailing slashes: `adminAppBaseUrl.valueAsString` is a
+    // synth-time CloudFormation TOKEN, not a real JS string, so a JS
+    // `.replace(/\/$/, '')` here would operate on the token placeholder and
+    // silently do nothing. Instead the footgun is closed at the source: the
+    // `adminAppBaseUrl` CfnParameter above carries an `allowedPattern` that
+    // rejects a trailing slash at deploy time, so `${base}/` cannot become
+    // `${base}//`. Given that guarantee, raw concatenation below is safe.
     //
     // Both follow the same `adminAppBaseUrl` + `includeLocalhostCallback`
     // gating.
