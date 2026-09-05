@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>クイズアプリ</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <h1>クイズアプリ</h1>
+      <p id="status" class="status" role="status"></p>
+
+      <!-- クイズ一覧 -->
+      <section id="quiz-list-view" hidden>
+        <h2>クイズを選んでください</h2>
+        <ul id="quiz-list" class="quiz-list"></ul>
+      </section>
+
+      <!-- 出題 -->
+      <section id="quiz-view" hidden>
+        <h2 id="quiz-title"></h2>
+        <form id="quiz-form">
+          <div id="questions"></div>
+          <button type="submit" class="btn primary">回答する</button>
+          <button type="button" id="back-btn" class="btn">一覧に戻る</button>
+        </form>
+      </section>
+
+      <!-- 結果 -->
+      <section id="result-view" hidden>
+        <h2>結果</h2>
+        <p id="score" class="score"></p>
+        <ul id="result-detail" class="result-detail"></ul>
+        <button type="button" id="restart-btn" class="btn primary">
+          もう一度クイズを選ぶ
+        </button>
+      </section>
+    </main>
+
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
