@@ -32,6 +32,23 @@ export interface ScoreResult {
   results: { n: number; correct: boolean; answerIndex: number }[];
 }
 
+export interface PublicQuestion {
+  n: number;
+  text: string;
+  options: string[];
+}
+
+/**
+ * Pure projection that strips the security-critical `answerIndex` (and any
+ * other server-only fields) from stored questions before they are returned
+ * to the client. Exported so it can be unit-tested without AWS.
+ */
+export function toPublicQuestions(
+  questions: { n: number; text: string; options: string[] }[],
+): PublicQuestion[] {
+  return questions.map((q) => ({ n: q.n, text: q.text, options: q.options }));
+}
+
 /**
  * Pure scoring helper (no AWS dependencies) so it can be unit-tested.
  * A question is correct when the submitted answer at the same position
@@ -87,7 +104,7 @@ interface QuestionItem {
 }
 
 /**
- * Write the sample quizzes to the table. Called on first `GET /quizzes`
+ * Write the sample quizzes to the table. Called on first `GET /api/quizzes`
  * when the table is empty. Idempotent enough for a demo: it simply
  * (re)writes the sample items.
  */
@@ -122,13 +139,27 @@ async function seedSampleData(): Promise<void> {
 
   // BatchWrite accepts up to 25 items per request.
   const chunkSize = 25;
+  const table = tableName();
   for (let i = 0; i < requests.length; i += chunkSize) {
     const chunk = requests.slice(i, i + chunkSize);
-    await ddb.send(
-      new BatchWriteCommand({
-        RequestItems: { [tableName()]: chunk },
-      }),
-    );
+    // `RequestItems` is typed loosely here so it can also hold the
+    // `UnprocessedItems` returned by the SDK on retry.
+    let requestItems: NonNullable<
+      ConstructorParameters<typeof BatchWriteCommand>[0]['RequestItems']
+    > = { [table]: chunk };
+    // Retry UnprocessedItems with a small bounded backoff so a throttled
+    // seed does not leave the table half-populated.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await ddb.send(
+        new BatchWriteCommand({ RequestItems: requestItems }),
+      );
+      const unprocessed = res.UnprocessedItems ?? {};
+      if (!unprocessed[table] || unprocessed[table].length === 0) {
+        break;
+      }
+      requestItems = unprocessed;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
   }
 }
 
@@ -192,7 +223,7 @@ export const handler = async (
     const routeKey = event.routeKey;
     const quizId = event.pathParameters?.quizId;
 
-    if (routeKey === 'GET /quizzes') {
+    if (routeKey === 'GET /api/quizzes') {
       const metas = await listQuizzes();
       const quizzes = metas
         .map((m) => ({
@@ -204,7 +235,7 @@ export const handler = async (
       return json(200, { quizzes });
     }
 
-    if (routeKey === 'GET /quizzes/{quizId}') {
+    if (routeKey === 'GET /api/quizzes/{quizId}') {
       if (!quizId) {
         return json(400, { message: 'quizId is required' });
       }
@@ -213,11 +244,7 @@ export const handler = async (
         return json(404, { message: 'quiz not found' });
       }
       // Strip answerIndex so the client cannot cheat.
-      const sanitized = questions.map((q) => ({
-        n: q.n,
-        text: q.text,
-        options: q.options,
-      }));
+      const sanitized = toPublicQuestions(questions);
       return json(200, {
         quizId: meta.quizId,
         title: meta.title,
@@ -225,7 +252,7 @@ export const handler = async (
       });
     }
 
-    if (routeKey === 'POST /quizzes/{quizId}/submit') {
+    if (routeKey === 'POST /api/quizzes/{quizId}/submit') {
       if (!quizId) {
         return json(400, { message: 'quizId is required' });
       }

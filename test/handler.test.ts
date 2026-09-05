@@ -1,4 +1,4 @@
-import { scoreAnswers, ScoredQuestion } from '../lambda/index';
+import { scoreAnswers, ScoredQuestion, toPublicQuestions } from '../lambda/index';
 
 /**
  * Unit tests for the REAL exported scoring helper from the Lambda source.
@@ -75,5 +75,50 @@ describe('scoreAnswers', () => {
   test('an empty quiz produces a zero-of-zero result', () => {
     const result = scoreAnswers([], []);
     expect(result).toEqual({ score: 0, total: 0, results: [] });
+  });
+});
+
+/**
+ * Tests for the REAL exported `toPublicQuestions` projection used by
+ * `GET /quizzes/{quizId}`. This is the security-critical behavior: the
+ * correct-answer index must NEVER leak to the client. The handler calls
+ * this exact function, so a regression that stopped stripping the answer
+ * would fail these tests.
+ */
+describe('toPublicQuestions (answer stripping)', () => {
+  const stored = [
+    {
+      n: 0,
+      text: '日本の首都はどこですか？',
+      options: ['大阪', '東京', '京都', '札幌'],
+      answerIndex: 1,
+    },
+    {
+      n: 1,
+      text: '1 + 1 は？',
+      options: ['1', '2', '3'],
+      answerIndex: 1,
+    },
+  ];
+
+  test('never includes answerIndex in the projected payload', () => {
+    const publicQuestions = toPublicQuestions(stored);
+    for (const q of publicQuestions) {
+      expect(Object.prototype.hasOwnProperty.call(q, 'answerIndex')).toBe(false);
+    }
+    // Also assert against a deep JSON scan, in case a field is nested.
+    expect(JSON.stringify(publicQuestions)).not.toContain('answerIndex');
+  });
+
+  test('preserves n, text and options exactly', () => {
+    const publicQuestions = toPublicQuestions(stored);
+    expect(publicQuestions).toEqual([
+      { n: 0, text: '日本の首都はどこですか？', options: ['大阪', '東京', '京都', '札幌'] },
+      { n: 1, text: '1 + 1 は？', options: ['1', '2', '3'] },
+    ]);
+  });
+
+  test('returns an empty array for an empty quiz', () => {
+    expect(toPublicQuestions([])).toEqual([]);
   });
 });

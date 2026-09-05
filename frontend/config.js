@@ -1,6 +1,9 @@
 // API のベース URL。
 //
-// `cdk deploy` 後、CfnOutput の `ApiEndpoint` (例: https://xxxx.execute-api.<region>.amazonaws.com)
-// の値をここに設定してから S3 に再デプロイしてください。
-// 空文字の場合は同一オリジンの相対パスにフォールバックします。
-window.API_BASE = '';
+// このアプリは CloudFront の `/api/*` ビヘイビアを通じて、SPA と同一オリジンで
+// HTTP API を呼び出します。そのため既定値は `/api` で、`cdk deploy` 後に手動で
+// 値を書き換える必要はありません（そのまま動作します）。
+//
+// もし API を別オリジン（例: execute-api の URL 直叩き）で呼びたい場合のみ、
+// ここを `https://xxxx.execute-api.<region>.amazonaws.com/api` のように設定できます。
+window.API_BASE = '/api';

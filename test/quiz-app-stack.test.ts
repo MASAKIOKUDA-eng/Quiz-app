@@ -44,7 +44,11 @@ describe('QuizAppStack', () => {
   });
 
   test('defines the three expected routes', () => {
-    const routeKeys = ['GET /quizzes', 'GET /quizzes/{quizId}', 'POST /quizzes/{quizId}/submit'];
+    const routeKeys = [
+      'GET /api/quizzes',
+      'GET /api/quizzes/{quizId}',
+      'POST /api/quizzes/{quizId}/submit',
+    ];
     // There should be exactly three routes wired up.
     template.resourceCountIs('AWS::ApiGatewayV2::Route', routeKeys.length);
     for (const routeKey of routeKeys) {
@@ -59,6 +63,18 @@ describe('QuizAppStack', () => {
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
         PriceClass: 'PriceClass_100',
+      }),
+    });
+  });
+
+  test('routes /api/* through CloudFront to the HTTP API origin', () => {
+    // The SPA reaches the API same-origin via a dedicated cache behavior,
+    // so no manual config.js edit is required after deploy.
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({ PathPattern: 'api/*' }),
+        ]),
       }),
     });
   });

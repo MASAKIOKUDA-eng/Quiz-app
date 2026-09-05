@@ -74,6 +74,15 @@ export class QuizAppStack extends cdk.Stack {
 
     const httpApi = new apigwv2.HttpApi(this, 'QuizHttpApi', {
       description: 'Serverless quiz HTTP API',
+      // CORS: the SPA calls the API same-origin through the CloudFront
+      // `/api/*` behavior (see below), so browsers do not normally issue
+      // cross-origin preflights. `allowOrigins: ['*']` is kept as a
+      // conscious trade-off so the API also stays usable directly (e.g.
+      // curl, or a custom domain) for this public, unauthenticated demo
+      // that persists no per-user data. Tighten to the CloudFront domain
+      // if this ever carries private data. Note: the CloudFront domain is
+      // created in this same stack, so referencing it here would introduce
+      // a circular dependency; same-origin routing avoids needing it.
       corsPreflight: {
         allowOrigins: ['*'],
         allowMethods: [
@@ -85,18 +94,21 @@ export class QuizAppStack extends cdk.Stack {
       },
     });
 
+    // Routes are registered under an `/api` prefix so the SPA can reach
+    // them same-origin via the CloudFront `/api/*` cache behavior without
+    // any path rewriting at the edge.
     httpApi.addRoutes({
-      path: '/quizzes',
+      path: '/api/quizzes',
       methods: [apigwv2.HttpMethod.GET],
       integration,
     });
     httpApi.addRoutes({
-      path: '/quizzes/{quizId}',
+      path: '/api/quizzes/{quizId}',
       methods: [apigwv2.HttpMethod.GET],
       integration,
     });
     httpApi.addRoutes({
-      path: '/quizzes/{quizId}/submit',
+      path: '/api/quizzes/{quizId}/submit',
       methods: [apigwv2.HttpMethod.POST],
       integration,
     });
@@ -112,6 +124,14 @@ export class QuizAppStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
 
+    // The HTTP API origin. `httpApi.apiEndpoint` is
+    // `https://<id>.execute-api.<region>.amazonaws.com`; CloudFront needs
+    // just the host, so strip the scheme.
+    const apiDomain = cdk.Fn.select(2, cdk.Fn.split('/', httpApi.apiEndpoint));
+    const apiOrigin = new origins.HttpOrigin(apiDomain, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+    });
+
     const distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
       comment: 'Quiz app static site',
       defaultRootObject: 'index.html',
@@ -121,7 +141,28 @@ export class QuizAppStack extends cdk.Stack {
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
       },
-      // SPA routing: send 403/404 back to index.html with a 200.
+      additionalBehaviors: {
+        // Forward `/api/*` to the HTTP API so the SPA can call the API
+        // same-origin (window.API_BASE = '/api'). No caching, and forward
+        // the query string / needed headers so GET and POST both work.
+        'api/*': {
+          origin: apiOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          // Forward everything except the Host header (the origin needs
+          // its own execute-api host, not the CloudFront domain).
+          originRequestPolicy:
+            cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
+      },
+      // SPA routing: send 403/404 back to index.html with a 200 so client
+      // side routing works. NOTE: CloudFront custom error responses are
+      // distribution-wide and cannot be scoped to a single behavior, so a
+      // 4xx from the API would also be rewritten to index.html/200. The
+      // SPA's fetch helper guards against this by verifying the response is
+      // JSON (see frontend/app.js), turning a swallowed HTML body into a
+      // clear error instead of a JSON parse crash.
       errorResponses: [
         {
           httpStatus: 403,
@@ -150,7 +191,8 @@ export class QuizAppStack extends cdk.Stack {
     // ---------------------------------------------------------------
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: httpApi.apiEndpoint,
-      description: 'Base URL of the quiz HTTP API',
+      description:
+        'Base URL of the quiz HTTP API (routes are under /api, e.g. /api/quizzes). The SPA reaches these same-origin via CloudFront /api/*.',
     });
     new cdk.CfnOutput(this, 'CloudFrontDomain', {
       value: `https://${distribution.distributionDomainName}`,

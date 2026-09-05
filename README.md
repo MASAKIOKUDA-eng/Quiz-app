@@ -25,23 +25,35 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
       │  HTTPS
       ▼
 [CloudFront (PriceClass_100, OAC)]
-      │  ├── 静的アセット ──► [S3 バケット (非公開 / BlockPublicAccess ALL)]
+      │  ├── 既定ビヘイビア (静的アセット) ──► [S3 バケット (非公開 / BlockPublicAccess ALL)]
       │
-      ▼  /quizzes などの API 呼び出し
-[API Gateway HTTP API (v2)]
-      │
-      ▼
-[AWS Lambda (Node.js 22, ARM64 / Graviton)]
-      │
-      ▼
-[Amazon DynamoDB (オンデマンド / PAY_PER_REQUEST)]
+      │  └── `/api/*` ビヘイビア ──────────────┐
+      │                                        ▼
+      │                             [API Gateway HTTP API (v2)]
+      │                                        │
+      │                                        ▼
+      │                     [AWS Lambda (Node.js 22, ARM64 / Graviton)]
+      │                                        │
+      │                                        ▼
+      │                     [Amazon DynamoDB (オンデマンド / PAY_PER_REQUEST)]
 ```
 
 - **フロントエンド**: 非公開 S3 バケット + CloudFront（Origin Access Control）。SPA ルーティングのため 403/404 を `index.html` に返します。
-- **API**: API Gateway HTTP API (v2)。REST API より安価。
-  - `GET /quizzes` — クイズ一覧
-  - `GET /quizzes/{quizId}` — 指定クイズの設問（正解は除外）
-  - `POST /quizzes/{quizId}/submit` — 回答を採点して結果を返す
+- **同一オリジンでの API 呼び出し**: CloudFront に `/api/*` の追加ビヘイビアを設定し、
+  HTTP API オリジンへ転送します。これにより SPA は **同一オリジンの `/api/...`** を
+  呼び出せ、デプロイ後に `config.js` を手で書き換える必要がありません
+  （`window.API_BASE = '/api'` が既定値）。
+- **API**: API Gateway HTTP API (v2)。REST API より安価。ルートは `/api` プレフィックス配下です。
+  - `GET /api/quizzes` — クイズ一覧
+  - `GET /api/quizzes/{quizId}` — 指定クイズの設問（正解は除外）
+  - `POST /api/quizzes/{quizId}/submit` — 回答を採点して結果を返す
+
+> **補足（CloudFront のエラーレスポンスについて）**: CloudFront のカスタムエラー
+> レスポンス（403/404 → `index.html`, 200）は**ディストリビューション全体**に
+> 適用され、特定ビヘイビアだけに限定できません。そのため API 側の 4xx が誤って
+> HTML(200) に置き換わる可能性があります。フロントエンドの `fetchJson` は応答の
+> `content-type` を検査し、JSON でなければ分かりやすいエラーを表示することで、
+> この状況（JSON 解析エラーではなく明確なメッセージ）に対処しています。
 - **バックエンド**: 単一の Lambda 関数（Node.js 22, ARM64）。
 - **データストア**: DynamoDB シングルテーブル、オンデマンド課金。
 
@@ -110,20 +122,19 @@ npx cdk deploy
 - `CloudFrontDomain` — SPA を配信する CloudFront ドメイン
 - `TableName` — DynamoDB テーブル名
 
-### フロントエンドの API ベース URL を設定する
+### 利用開始（手動設定は不要）
 
-SPA は `frontend/config.js` の `window.API_BASE` を参照します。デプロイ後に
-出力された `ApiEndpoint` の値を設定してから、S3 へ再デプロイしてください。
+SPA は CloudFront の `/api/*` ビヘイビア経由で**同一オリジン**の API を呼び出すため、
+デプロイ後に `frontend/config.js` を書き換える手順は**不要**です
+（`window.API_BASE = '/api'` が既定）。
 
-```js
-// frontend/config.js
-window.API_BASE = 'https://xxxx.execute-api.<region>.amazonaws.com';
-```
+`cdk deploy` 完了後、`CloudFrontDomain` の URL にブラウザでアクセスすれば
+そのままアプリが利用できます。
 
-値を書き換えたあと、再度 `npx cdk deploy` を実行すると `BucketDeployment` により
-更新後のアセットが S3 に配置され、CloudFront のキャッシュが無効化されます。
-
-その後、`CloudFrontDomain` の URL にブラウザでアクセスするとアプリが利用できます。
+> API を別オリジン（`execute-api` の URL 直叩き）で呼びたい特別な場合のみ、
+> `frontend/config.js` の `window.API_BASE` を `ApiEndpoint`＋`/api`
+> （例: `https://xxxx.execute-api.<region>.amazonaws.com/api`）に設定して
+> 再デプロイしてください。
 
 ---
 
