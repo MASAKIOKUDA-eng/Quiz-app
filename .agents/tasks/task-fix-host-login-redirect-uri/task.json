@@ -9,6 +9,11 @@
     "tests": "skipped",
     "test_quality": "pass",
     "docker_build": "skipped",
-    "summary": "INTEGRATIONS_ONLY sandbox: no node_modules and npm registry 403, so cdk synth / jest / vite build cannot run (npm test fails on missing preload). Verified correct-by-construction by reading: admin redirect_uri origin+'/admin.html' matches ${adminAppBaseUrl}/admin.html; host redirect_uri origin+'/' matches ${adminAppBaseUrl}/; no /index.html remains in any OAuth redirect path or Cognito callback/logout array; localhost variants updated to /admin.html and /. Added jest test asserts the new scheme and would fail if reverted (test_quality pass). User's real verification: `npm test` + `npx cdk synth` at repo root, `cd frontend && npm install && npm run build`."
+    "summary": "INTEGRATIONS_ONLY sandbox: no node_modules and npm registry 403, so cdk synth / jest / vite build cannot run (npm/node preload also fails). Verified correct-by-construction by reading: admin redirect_uri origin+'/admin.html' matches ${adminAppBaseUrl}/admin.html; host redirect_uri origin+'/' matches ${adminAppBaseUrl}/; no /index.html remains in any OAuth redirect path or Cognito callback/logout array; localhost variants updated to /admin.html and /. Added jest tests assert the new scheme and the adminAppBaseUrl AllowedPattern, both fail if reverted (test_quality pass). User's real verification: `npm test` + `npx cdk synth` at repo root, `cd frontend && npm install && npm run build`."
+  },
+  "review": {
+    "v1": "APPROVED with 2 non-blocking findings (2026-09-05-224913-review.md)",
+    "v2": "APPROVED, 0 issues (2026-09-05-225451-review.md)",
+    "follow_up": "v1 finding 1 (trailing-slash footgun on adminAppBaseUrl) fixed via CfnParameter allowedPattern + test in commit 3126205; v1 finding 2 (host token captured only after entering host view) acknowledged as pre-existing/out-of-scope."
   }
 }
