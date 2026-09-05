@@ -5,7 +5,10 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
-import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import {
+  HttpLambdaIntegration,
+  WebSocketLambdaIntegration,
+} from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 
@@ -52,6 +55,11 @@ export class QuizAppStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       // Point-in-time recovery left off to keep the demo cost minimal.
       pointInTimeRecovery: false,
+      // Realtime battle (FEAT-002): battle ROOM#/CONN#/PLAYER# items carry a
+      // numeric `ttl` (epoch seconds) so DynamoDB auto-expires stale rooms
+      // and connections at no cost. Existing QUIZ# items simply omit `ttl`
+      // and are never expired, so this is purely additive.
+      timeToLiveAttribute: 'ttl',
     });
 
     // ---------------------------------------------------------------
@@ -213,11 +221,26 @@ export class QuizAppStack extends cdk.Stack {
       includeLocalhostCallbackCtx !== false &&
       includeLocalhostCallbackCtx !== 'false';
 
-    const callbackUrls = [`${adminAppBaseUrl.valueAsString}/admin.html`];
-    const logoutUrls = [`${adminAppBaseUrl.valueAsString}/admin.html`];
+    // The admin SPA lives at `/admin.html`. The realtime battle HOST view
+    // (FEAT-002) lives in the PUBLIC app at `/index.html`, but it reuses the
+    // SAME Cognito Hosted UI login, so the Hosted UI redirects the host back
+    // to `/index.html`. That URL must therefore ALSO be a trusted
+    // callback/logout URL on this app client, alongside the existing
+    // `/admin.html` entries (which are kept unchanged). Both follow the same
+    // `adminAppBaseUrl` + `includeLocalhostCallback` gating.
+    const callbackUrls = [
+      `${adminAppBaseUrl.valueAsString}/admin.html`,
+      `${adminAppBaseUrl.valueAsString}/index.html`,
+    ];
+    const logoutUrls = [
+      `${adminAppBaseUrl.valueAsString}/admin.html`,
+      `${adminAppBaseUrl.valueAsString}/index.html`,
+    ];
     if (includeLocalhostCallback) {
       callbackUrls.push('http://localhost:8080/admin.html');
+      callbackUrls.push('http://localhost:8080/index.html');
       logoutUrls.push('http://localhost:8080/admin.html');
+      logoutUrls.push('http://localhost:8080/index.html');
     }
 
     const userPoolClient = userPool.addClient('AdminAppClient', {
@@ -303,6 +326,87 @@ export class QuizAppStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------
+    // (c.2) Realtime battle (FEAT-002): a dedicated ARM64 WebSocket Lambda
+    //       behind an API Gateway v2 WebSocket API.
+    //
+    //   The WebSocket handler runs the server-authoritative battle game
+    //   state machine: it stores rooms/connections/players in the SAME
+    //   DynamoDB table under ROOM#/CONN# namespaces (QUIZ# items untouched),
+    //   scores answers server-side using the stored answerIndex (never
+    //   broadcasting it), and pushes state to every room connection via the
+    //   API Gateway Management API (ManageConnections grant below).
+    //
+    //   Host-only actions (createRoom/startGame/nextQuestion/endGame) are
+    //   gated by verifying the SAME Cognito id token the admin SPA already
+    //   obtains via the Hosted UI, so the handler is given the issuer URL
+    //   and the app client id to check iss/aud/signature. Participants
+    //   (joinRoom/submitAnswer) connect with just a name + roomId, no token.
+    // ---------------------------------------------------------------
+    const wsFunction = new NodejsFunction(this, 'WsFunction', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
+      entry: path.join(__dirname, '..', 'lambda', 'ws.ts'),
+      handler: 'handler',
+      environment: {
+        TABLE_NAME: table.tableName,
+        ALLOWED_ORIGIN: allowedOrigin,
+        // Host JWT verification: the handler validates the Cognito id token
+        // against this issuer + audience (client id) and the pool JWKS.
+        COGNITO_ISSUER: issuer,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node22',
+        // aws-sdk v3 (incl. @aws-sdk/client-apigatewaymanagementapi) ships
+        // with the Node runtime; keep it external.
+        externalModules: ['@aws-sdk/*'],
+      },
+    });
+
+    table.grantReadWriteData(wsFunction);
+
+    const wsIntegration = new WebSocketLambdaIntegration(
+      'WsIntegration',
+      wsFunction,
+    );
+
+    const wsApi = new apigwv2.WebSocketApi(this, 'QuizWebSocketApi', {
+      description: 'Realtime quiz battle WebSocket API',
+      connectRouteOptions: { integration: wsIntegration },
+      disconnectRouteOptions: { integration: wsIntegration },
+      defaultRouteOptions: { integration: wsIntegration },
+    });
+
+    // Custom battle action routes (matched on the JSON body `action` field
+    // via the WebSocket API's default route-selection expression
+    // `$request.body.action`).
+    for (const action of [
+      'createRoom',
+      'reattachRoom',
+      'joinRoom',
+      'startGame',
+      'submitAnswer',
+      'nextQuestion',
+      'endGame',
+    ]) {
+      wsApi.addRoute(action, { integration: wsIntegration });
+    }
+
+    const wsStage = new apigwv2.WebSocketStage(this, 'QuizWebSocketStage', {
+      webSocketApi: wsApi,
+      stageName: 'prod',
+      autoDeploy: true,
+    });
+
+    // Let the WebSocket Lambda call the API Gateway Management API
+    // (PostToConnection) to push state to connected clients.
+    wsApi.grantManageConnections(wsFunction);
+
+    // ---------------------------------------------------------------
     // (d) Frontend hosting.
     //
     //   The static SPA is hosted by AWS Amplify Hosting, connected to the
@@ -344,6 +448,15 @@ export class QuizAppStack extends cdk.Stack {
       value: `https://${domainPrefix}.auth.${cdk.Stack.of(this).region}.amazoncognito.com`,
       description:
         'Cognito Hosted UI base URL. The admin SPA redirects here for login. The domain prefix must be globally unique.',
+    });
+
+    // Realtime battle (FEAT-002) WebSocket endpoint. The SPA connects here
+    // for the live battle. Set the Amplify env var WS_URL to this value (it
+    // is mapped to VITE_WS_URL at build time, mirroring API_BASE).
+    new cdk.CfnOutput(this, 'WebSocketEndpoint', {
+      value: wsStage.url,
+      description:
+        'wss:// URL of the realtime battle WebSocket API (prod stage). Set the Amplify env var WS_URL to this value; it is mapped to VITE_WS_URL at build time.',
     });
   }
 }

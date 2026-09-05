@@ -16,10 +16,17 @@ import {
 } from '../api';
 import { append, makeRecord } from '../history';
 import HistoryView from './HistoryView';
+import BattlePage from './BattlePage';
 
 // 表示ビュー。旧 app.js の show('list'|'quiz'|'result') をミラーしつつ、履歴画面と
 // 回答方式の選択画面（chooseMode）を追加。
-type View = 'list' | 'chooseMode' | 'quiz' | 'result' | 'history';
+type View =
+  | 'list'
+  | 'chooseMode'
+  | 'quiz'
+  | 'result'
+  | 'history'
+  | 'battle';
 
 // 回答方式。'all' は従来の一括表示、'oneByOne' は一問一答。
 // どちらのモードも同じ selected 状態・同じ採点/結果/履歴の経路を共有する。
@@ -136,6 +143,7 @@ export default function HomePage() {
           quizzes={quizzes}
           onSelect={loadQuiz}
           onViewHistory={() => setView('history')}
+          onStartBattle={() => setView('battle')}
         />
       )}
 
@@ -178,6 +186,8 @@ export default function HomePage() {
 
       {view === 'history' && <HistoryView onBack={() => setView('list')} />}
 
+      {view === 'battle' && <BattlePage onBack={() => setView('list')} />}
+
       <div className="home-link">
         <a href="admin.html">管理者ページへ</a>
       </div>
@@ -191,10 +201,12 @@ function QuizList({
   quizzes,
   onSelect,
   onViewHistory,
+  onStartBattle,
 }: {
   quizzes: QuizSummary[];
   onSelect: (quizId: string) => void;
   onViewHistory: () => void;
+  onStartBattle: () => void;
 }) {
   if (quizzes.length === 0) {
     return (
@@ -205,6 +217,9 @@ function QuizList({
         <div className="quiz-actions">
           <button type="button" className="btn" onClick={onViewHistory}>
             履歴を見る
+          </button>
+          <button type="button" className="btn" onClick={onStartBattle}>
+            リアルタイム対戦
           </button>
         </div>
       </>
@@ -231,6 +246,9 @@ function QuizList({
       <div className="quiz-actions">
         <button type="button" className="btn" onClick={onViewHistory}>
           履歴を見る
+        </button>
+        <button type="button" className="btn primary" onClick={onStartBattle}>
+          リアルタイム対戦
         </button>
       </div>
     </>

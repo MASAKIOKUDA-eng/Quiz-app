@@ -30,11 +30,30 @@ describe('QuizAppStack', () => {
     });
   });
 
+  test('the DynamoDB table has TTL enabled on the ttl attribute', () => {
+    // FEAT-002: battle ROOM#/CONN#/PLAYER# items auto-expire via `ttl`.
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TimeToLiveSpecification: {
+        AttributeName: 'ttl',
+        Enabled: true,
+      },
+    });
+  });
+
   test('API Lambda runs on ARM64 with a Node runtime', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       Architectures: ['arm64'],
       Runtime: Match.stringLikeRegexp('^nodejs'),
     });
+  });
+
+  test('provisions two ARM64 Lambda functions (HTTP API + WebSocket)', () => {
+    // FEAT-002 adds a second (WebSocket) Lambda; both are ARM64.
+    template.resourceCountIs('AWS::Lambda::Function', 2);
+    const fns = template.findResources('AWS::Lambda::Function');
+    for (const key of Object.keys(fns)) {
+      expect(fns[key].Properties.Architectures).toEqual(['arm64']);
+    }
   });
 
   test('exposes an HTTP API (API Gateway v2)', () => {
@@ -43,8 +62,22 @@ describe('QuizAppStack', () => {
     });
   });
 
-  test('defines the seven expected routes', () => {
-    const routeKeys = [
+  test('exposes a WebSocket API (API Gateway v2) for realtime battle', () => {
+    // FEAT-002: a separate WEBSOCKET-protocol API is provisioned alongside
+    // the untouched HTTP API.
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      ProtocolType: 'WEBSOCKET',
+    });
+    // Exactly two API Gateway v2 APIs: the HTTP API + the WebSocket API.
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 2);
+  });
+
+  test('defines the seven HTTP routes unchanged (scoped by RouteKey)', () => {
+    // The 7 HTTP routes are asserted by RouteKey. WebSocket routes are
+    // separate AWS::ApiGatewayV2::Route resources with $connect/etc. keys,
+    // so we no longer use a blanket resourceCountIs over all routes; instead
+    // we count HTTP routes by matching the '/api/...' RouteKey shape.
+    const httpRouteKeys = [
       'GET /api/quizzes',
       'GET /api/quizzes/{quizId}',
       'POST /api/quizzes/{quizId}/submit',
@@ -53,14 +86,60 @@ describe('QuizAppStack', () => {
       'PUT /api/admin/quizzes/{quizId}',
       'DELETE /api/admin/quizzes/{quizId}',
     ];
-    // There should be exactly seven routes wired up (3 public + POST admin
-    // create + GET/PUT/DELETE admin single-quiz).
-    template.resourceCountIs('AWS::ApiGatewayV2::Route', routeKeys.length);
-    for (const routeKey of routeKeys) {
+    for (const routeKey of httpRouteKeys) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
         RouteKey: routeKey,
       });
     }
+    // Exactly seven routes whose RouteKey contains '/api/' (the HTTP routes).
+    const allRoutes = template.findResources('AWS::ApiGatewayV2::Route');
+    const apiRoutes = Object.values(allRoutes).filter((r) => {
+      const rk = r.Properties?.RouteKey;
+      return typeof rk === 'string' && rk.includes('/api/');
+    });
+    expect(apiRoutes).toHaveLength(httpRouteKeys.length);
+  });
+
+  test('defines the WebSocket routes ($connect/$disconnect/$default + actions)', () => {
+    const wsRouteKeys = [
+      '$connect',
+      '$disconnect',
+      '$default',
+      'createRoom',
+      'reattachRoom',
+      'joinRoom',
+      'startGame',
+      'submitAnswer',
+      'nextQuestion',
+      'endGame',
+    ];
+    for (const routeKey of wsRouteKeys) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+      });
+    }
+  });
+
+  test('provisions a WebSocket stage', () => {
+    template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+      StageName: 'prod',
+      AutoDeploy: true,
+    });
+  });
+
+  test('the WebSocket Lambda role can call execute-api ManageConnections', () => {
+    // grantManageConnections attaches an IAM policy allowing the
+    // execute-api:ManageConnections action for the @connections endpoint.
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'execute-api:ManageConnections',
+            Effect: 'Allow',
+          }),
+        ]),
+      }),
+    });
   });
 
   test('provisions a Cognito User Pool with self sign-up disabled', () => {
@@ -181,6 +260,7 @@ describe('QuizAppStack', () => {
     template.hasOutput('UserPoolId', {});
     template.hasOutput('UserPoolClientId', {});
     template.hasOutput('UserPoolHostedUiDomain', {});
+    template.hasOutput('WebSocketEndpoint', {});
     expect(() => template.hasOutput('CloudFrontDomain', {})).toThrow();
   });
 });

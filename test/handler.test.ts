@@ -5,6 +5,17 @@ import {
   validateAndNormalizeQuizInput,
   validateAndNormalizeQuizUpdate,
 } from '../lambda/index';
+import {
+  generateRoomId,
+  aggregateScoreboard,
+  nextGamePhase,
+  toParticipantQuestion,
+  scoreSingleAnswer,
+  validateJoinInput,
+  validateTokenClaims,
+  ROOM_ID_ALPHABET,
+  ROOM_ID_LENGTH,
+} from '../lambda/ws';
 import { SAMPLE_QUIZZES } from '../lambda/seed-data';
 
 /**
@@ -397,5 +408,309 @@ describe('SAMPLE_QUIZZES seed data validity', () => {
     for (const quizId of quizIds) {
       expect(quizId).toMatch(/^[a-z0-9-]+$/);
     }
+  });
+});
+
+/**
+ * Realtime battle (FEAT-002) PURE helpers imported from the REAL WebSocket
+ * handler source (lambda/ws.ts). These are pure (no AWS SDK), so no mocking
+ * is required. The security-critical test proves toParticipantQuestion never
+ * leaks answerIndex, mirroring the toPublicQuestions test above.
+ */
+describe('generateRoomId', () => {
+  const idPattern = new RegExp(`^[${ROOM_ID_ALPHABET}]{${ROOM_ID_LENGTH}}$`);
+
+  test('matches the documented alphabet and length', () => {
+    for (let i = 0; i < 200; i++) {
+      const id = generateRoomId();
+      expect(id).toHaveLength(ROOM_ID_LENGTH);
+      expect(id).toMatch(idPattern);
+    }
+  });
+
+  test('excludes ambiguous glyphs (0, O, 1, I, L)', () => {
+    for (const ch of ['0', 'O', '1', 'I', 'L']) {
+      expect(ROOM_ID_ALPHABET).not.toContain(ch);
+    }
+  });
+
+  test('is reasonably unique across many calls', () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 1000; i++) {
+      ids.add(generateRoomId());
+    }
+    // Collisions in 1000 draws from 31^6 (~887M) should be vanishingly rare.
+    expect(ids.size).toBeGreaterThan(995);
+  });
+});
+
+describe('aggregateScoreboard', () => {
+  test('sorts by score descending', () => {
+    const board = aggregateScoreboard([
+      { name: 'alice', score: 1 },
+      { name: 'bob', score: 3 },
+      { name: 'carol', score: 2 },
+    ]);
+    expect(board).toEqual([
+      { name: 'bob', score: 3 },
+      { name: 'carol', score: 2 },
+      { name: 'alice', score: 1 },
+    ]);
+  });
+
+  test('breaks ties by name ascending', () => {
+    const board = aggregateScoreboard([
+      { name: 'charlie', score: 2 },
+      { name: 'alice', score: 2 },
+      { name: 'bob', score: 2 },
+    ]);
+    expect(board.map((e) => e.name)).toEqual(['alice', 'bob', 'charlie']);
+  });
+
+  test('returns only name and score (no extra fields)', () => {
+    const board = aggregateScoreboard([{ name: 'a', score: 5 }]);
+    expect(Object.keys(board[0]).sort()).toEqual(['name', 'score']);
+  });
+
+  test('handles an empty roster', () => {
+    expect(aggregateScoreboard([])).toEqual([]);
+  });
+});
+
+describe('nextGamePhase (state machine)', () => {
+  test('lobby -> in_question when there are questions', () => {
+    expect(nextGamePhase('lobby', 3, -1)).toBe('in_question');
+  });
+
+  test('lobby -> finished when there are no questions', () => {
+    expect(nextGamePhase('lobby', 0, -1)).toBe('finished');
+  });
+
+  test('in_question -> between', () => {
+    expect(nextGamePhase('in_question', 3, 0)).toBe('between');
+  });
+
+  test('between -> in_question when more questions remain', () => {
+    expect(nextGamePhase('between', 3, 0)).toBe('in_question');
+    expect(nextGamePhase('between', 3, 1)).toBe('in_question');
+  });
+
+  test('between -> finished after the final question', () => {
+    expect(nextGamePhase('between', 3, 2)).toBe('finished');
+  });
+
+  test('finished is terminal', () => {
+    expect(nextGamePhase('finished', 3, 2)).toBe('finished');
+  });
+
+  test('walks the full lifecycle of a 2-question game', () => {
+    // lobby -> in_question(0) -> between -> in_question(1) -> between ->
+    // finished
+    let phase = nextGamePhase('lobby', 2, -1);
+    expect(phase).toBe('in_question');
+    phase = nextGamePhase(phase, 2, 0);
+    expect(phase).toBe('between');
+    phase = nextGamePhase(phase, 2, 0);
+    expect(phase).toBe('in_question');
+    phase = nextGamePhase(phase, 2, 1);
+    expect(phase).toBe('between');
+    phase = nextGamePhase(phase, 2, 1);
+    expect(phase).toBe('finished');
+  });
+});
+
+describe('toParticipantQuestion (answer stripping)', () => {
+  const stored = {
+    n: 0,
+    text: '日本の首都はどこですか？',
+    options: ['大阪', '東京', '京都', '札幌'],
+    answerIndex: 1,
+  };
+
+  test('never includes answerIndex in the projected payload', () => {
+    const projected = toParticipantQuestion(stored);
+    expect(Object.prototype.hasOwnProperty.call(projected, 'answerIndex')).toBe(
+      false,
+    );
+    // Deep JSON scan in case a field is nested.
+    expect(JSON.stringify(projected)).not.toContain('answerIndex');
+  });
+
+  test('preserves n, text and options exactly', () => {
+    expect(toParticipantQuestion(stored)).toEqual({
+      n: 0,
+      text: '日本の首都はどこですか？',
+      options: ['大阪', '東京', '京都', '札幌'],
+    });
+  });
+});
+
+describe('scoreSingleAnswer', () => {
+  test('true only when the submitted index equals the stored answer', () => {
+    expect(scoreSingleAnswer(2, 2)).toBe(true);
+    expect(scoreSingleAnswer(2, 1)).toBe(false);
+    expect(scoreSingleAnswer(0, 0)).toBe(true);
+  });
+
+  test('non-integer submissions are incorrect', () => {
+    expect(scoreSingleAnswer(1, 1.5)).toBe(false);
+    expect(scoreSingleAnswer(1, NaN)).toBe(false);
+  });
+});
+
+describe('validateJoinInput', () => {
+  test('accepts a valid name + roomId (normalizing them)', () => {
+    const validRoomId = ROOM_ID_ALPHABET.slice(0, ROOM_ID_LENGTH); // e.g. ABCDEF
+    const result = validateJoinInput({ name: '  たろう  ', roomId: validRoomId.toLowerCase() });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.name).toBe('たろう');
+      // roomId is upper-cased/trimmed to the canonical shape.
+      expect(result.roomId).toBe(validRoomId);
+    }
+  });
+
+  test('rejects a non-object body', () => {
+    expect(validateJoinInput(null).ok).toBe(false);
+    expect(validateJoinInput('nope').ok).toBe(false);
+    expect(validateJoinInput(42).ok).toBe(false);
+  });
+
+  test('rejects an empty or missing name', () => {
+    const roomId = ROOM_ID_ALPHABET.slice(0, ROOM_ID_LENGTH);
+    expect(validateJoinInput({ roomId }).ok).toBe(false);
+    expect(validateJoinInput({ name: '   ', roomId }).ok).toBe(false);
+  });
+
+  test('rejects an over-long name', () => {
+    const roomId = ROOM_ID_ALPHABET.slice(0, ROOM_ID_LENGTH);
+    expect(validateJoinInput({ name: 'x'.repeat(41), roomId }).ok).toBe(false);
+  });
+
+  test('rejects an invalid roomId shape', () => {
+    expect(validateJoinInput({ name: 'a', roomId: 'short' }).ok).toBe(false);
+    expect(validateJoinInput({ name: 'a', roomId: '' }).ok).toBe(false);
+    // Contains an ambiguous glyph excluded from the alphabet (0/O/1/I/L).
+    expect(validateJoinInput({ name: 'a', roomId: 'ABC01I' }).ok).toBe(false);
+    expect(validateJoinInput({ name: 'a', roomId: 123456 }).ok).toBe(false);
+  });
+});
+
+/**
+ * Tests for the REAL exported `validateTokenClaims` helper — the PURE,
+ * signature-free part of host Cognito id-token verification (alg/kid/exp/iss/
+ * aud/token_use/sub). Extracting it lets us unit-test the security-critical
+ * REJECT paths without AWS/JWKS/network (the RS256 signature check stays in the
+ * AWS-touching `verifyHostToken`). `now` is injected for deterministic exp.
+ */
+describe('validateTokenClaims (host token reject paths)', () => {
+  const issuer = 'https://cognito-idp.ap-northeast-1.amazonaws.com/pool';
+  const clientId = 'abc123clientid';
+  const expected = { issuer, clientId };
+  const NOW = 1_700_000_000;
+
+  const goodHeader = { alg: 'RS256', kid: 'key-1' };
+  const goodPayload = {
+    exp: NOW + 3600,
+    iss: issuer,
+    aud: clientId,
+    token_use: 'id',
+    sub: 'user-sub-123',
+  };
+
+  test('accepts a fully valid header + payload and returns sub + kid', () => {
+    const result = validateTokenClaims(goodHeader, goodPayload, expected, NOW);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.sub).toBe('user-sub-123');
+      expect(result.kid).toBe('key-1');
+    }
+  });
+
+  test('rejects a non-RS256 alg (e.g. none/HS256)', () => {
+    expect(
+      validateTokenClaims({ alg: 'none', kid: 'key-1' }, goodPayload, expected, NOW).ok,
+    ).toBe(false);
+    expect(
+      validateTokenClaims({ alg: 'HS256', kid: 'key-1' }, goodPayload, expected, NOW).ok,
+    ).toBe(false);
+  });
+
+  test('rejects a missing or empty kid', () => {
+    expect(validateTokenClaims({ alg: 'RS256' }, goodPayload, expected, NOW).ok).toBe(
+      false,
+    );
+    expect(
+      validateTokenClaims({ alg: 'RS256', kid: '' }, goodPayload, expected, NOW).ok,
+    ).toBe(false);
+  });
+
+  test('rejects an expired token (exp in the past)', () => {
+    const result = validateTokenClaims(
+      goodHeader,
+      { ...goodPayload, exp: NOW - 1 },
+      expected,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('token expired');
+    }
+  });
+
+  test('rejects a missing or non-numeric exp', () => {
+    const { exp: _drop, ...noExp } = goodPayload;
+    expect(validateTokenClaims(goodHeader, noExp, expected, NOW).ok).toBe(false);
+    expect(
+      validateTokenClaims(goodHeader, { ...goodPayload, exp: 'soon' }, expected, NOW).ok,
+    ).toBe(false);
+  });
+
+  test('rejects an issuer mismatch', () => {
+    const result = validateTokenClaims(
+      goodHeader,
+      { ...goodPayload, iss: 'https://evil.example/pool' },
+      expected,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects an audience mismatch (e.g. an access token / wrong client)', () => {
+    const result = validateTokenClaims(
+      goodHeader,
+      { ...goodPayload, aud: 'some-other-client' },
+      expected,
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects a missing token_use (tightened: must be exactly "id")', () => {
+    const { token_use: _drop, ...noUse } = goodPayload;
+    const result = validateTokenClaims(goodHeader, noUse, expected, NOW);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('token_use must be id');
+    }
+  });
+
+  test('rejects a non-"id" token_use (e.g. an access token)', () => {
+    expect(
+      validateTokenClaims(
+        goodHeader,
+        { ...goodPayload, token_use: 'access' },
+        expected,
+        NOW,
+      ).ok,
+    ).toBe(false);
+  });
+
+  test('rejects a missing or empty sub', () => {
+    const { sub: _drop, ...noSub } = goodPayload;
+    expect(validateTokenClaims(goodHeader, noSub, expected, NOW).ok).toBe(false);
+    expect(
+      validateTokenClaims(goodHeader, { ...goodPayload, sub: '' }, expected, NOW).ok,
+    ).toBe(false);
   });
 });

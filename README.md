@@ -22,6 +22,11 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
   （確認ダイアログ付き）できます。既存クイズの一覧も表示されます。管理者認証は
   **Amazon Cognito（Hosted UI）** で行い、書き込み API は JWT オーソライザーで保護しています。
 - 初回の `GET /api/quizzes` 実行時、DynamoDB が空であればデフォルトの AWS 問題を自動投入します。
+- **リアルタイム対戦（②）** に対応しています。ホストがルームを作成し、参加者は
+  **ルームID** と表示名だけで（ログイン不要で）参加します。全員に同じ問題を同期配信し、
+  参加者個人スコアのライブ順位表を表示します。ホスト（ルーム作成者）のみ既存の
+  **Cognito 管理者ログイン**が必要です。通信は **API Gateway WebSocket API** で行い、
+  採点はサーバー側で実施します（正解 `answerIndex` は参加者クライアントに一切送りません）。
 
 ---
 
@@ -86,8 +91,12 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
     場合は **404** を返します。
   - `GET /api/admin/quizzes/{quizId}`（**管理者用の読み取り**）: 公開用 `GET` と異なり、各問の正解
     `answerIndex` を**含めて**返します（編集フォームの正解プリフィル用）。存在しない場合は **404** を返します。
-- **バックエンド**: 単一の Lambda 関数（Node.js 22, ARM64）。VPC / NAT は使いません。
-- **データストア**: DynamoDB シングルテーブル、オンデマンド課金。
+- **バックエンド**: HTTP API 用の Lambda 関数（Node.js 22, ARM64）。VPC / NAT は使いません。
+  リアルタイム対戦用には**専用の ws Lambda**（同じく Node.js 22 / ARM64・`lambda/ws.ts`）を
+  追加しています（詳細は「リアルタイム対戦」節を参照）。
+- **データストア**: DynamoDB シングルテーブル、オンデマンド課金。リアルタイム対戦の
+  ルーム/接続/プレイヤー項目は同じテーブルに名前空間を分けて格納し、TTL 属性 `ttl` で
+  自動失効させます（既存の `QUIZ#` 項目は不変）。
 
 > **なぜ S3 + CloudFront をやめたか**: 以前はフロントを非公開 S3 + CloudFront で配信していましたが、
 > FEAT-004 で Amplify Hosting に移行し、S3 + CloudFront は**削除**しました。理由は 2 つです。
@@ -202,6 +211,123 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
 
 ---
 
+## リアルタイム対戦（②・ルームID方式）
+
+複数人が同じ問題に同時に挑戦し、参加者個人スコアのライブ順位表を競う
+**リアルタイム対戦モード**です。トップページ（`/index.html`）のクイズ一覧画面から
+「**リアルタイム対戦**」ボタンで入り、ホスト（ルーム作成者）または参加者を選びます。
+既存の個人プレイ（クイズ一覧・モード選択・回答・結果・履歴、一括／1 問ずつ）は
+すべてそのまま利用でき、この機能は**それらに影響を与えない追加機能**です。
+
+### 対戦の流れ
+
+1. **ホストがルーム作成**: ホストは既存の**登録済みクイズから 1 つを選び**、ルームを
+   作成します。出題は新規に作らず、通常プレイと同じクイズ（デフォルト問題・自作クイズ・
+   JAWS SONIC 2026 など）を利用します。
+2. **ルームID共有**: ルーム作成時に短い**ルームID**が発行されます。ホストはこれを
+   参加者に口頭やチャットで共有します。
+   ルームIDは紛らわしい文字（`0`/`O`/`1`/`I`/`L`）を除いた英数字 6 文字です。
+3. **参加者が名前＋ルームIDで参加**: 参加者は**ログイン不要**で、**表示名**（1〜40 文字）と
+   **ルームID**を入力して参加します。参加者名は順位表に表示されます。
+4. **ホスト開始**: 参加者が揃ったらホストが「ゲーム開始」を押します。
+5. **同じ問題を同期配信**: 全参加者に同じ問題が同時に配信されます。進行は**ホストが
+   問題ごとに手動で進めます**（正解を表示 → 次の設問へ）。
+6. **参加者個人スコアのライブ順位表**: 各参加者の回答はサーバー側で採点され、
+   スコア降順（同点は名前昇順）の順位表がリアルタイムに全員へ配信されます。
+
+### 出題と採点（サーバー側・正解は非公開）
+
+- **出題は既存の登録済みクイズから選ぶ**だけで、対戦専用の問題管理はありません。
+- **採点はサーバー側（ws Lambda）で行い**、DynamoDB に保存された正解 `answerIndex` を
+  参照します。参加者/ブラウザに配信されるメッセージには**正解 `answerIndex` を一切
+  含めません**（配信される問題は「番号・本文・選択肢」のみ）。個人プレイと同じく、
+  クライアント側では答えが見えないようになっています。
+- 参加者の回答は 1 問につき 1 回のみ有効（重複回答は無視）で、`in_question` フェーズの
+  間だけ受け付けます。
+
+### 認証モデル（ホストのみ Cognito / 参加者はログイン不要）
+
+- **ホスト（ルーム作成者）**は、既存の **Amazon Cognito 管理者アカウント**で
+  **Hosted UI** からログインする必要があります。ホスト用の画面は**公開アプリ
+  （`/index.html`）**内にあり、ルーム作成・開始・進行・終了の各操作では毎回 Cognito の
+  ID トークンをサーバーへ渡し、ws Lambda が発行元（issuer）・オーディエンス（アプリ
+  クライアント ID）・署名（プール JWKS による RS256 検証）を検証します。
+- ホストのログインが公開アプリへ戻れるように、Cognito アプリクライアント
+  （`AdminAppClient`）のコールバック/ログアウト URL に **`/index.html`** を追加しています
+  （従来の `/admin.html` のエントリはそのまま残しています）。ローカル開発では
+  `includeLocalhostCallback` が `true` の間 `http://localhost:8080/index.html` も許可されます。
+- **参加者**は**認証不要**です。表示名（1〜40 文字）とルームIDのみで参加します。
+  参加者からのメッセージにトークンは含まれません。
+
+### 切断時の挙動（ホストの再接続 / 参加者の退出）
+
+- **ホストの一時切断は致命的ではありません**。ホストの `$disconnect` ではルームを
+  `finished` にはせず、`hostConnId` を空にして「離席中」を示すだけで、ルームの進行状態
+  （フェーズ・現在の設問・スコア）は保持されます。モバイル回線の切り替えや PC のスリープで
+  一時的に切断されても、全員のゲームが終わってしまうことはありません。
+- **ホストの再接続（`reattachRoom`）**: 再ログインしたホストは、トークンの `sub` が
+  ルームの `hostSub` と一致する場合に限り、`reattachRoom` で既存ルームへ復帰できます。
+  `hostConnId` を新しい接続に付け替え、進行状態を維持したまま操作を再開します。フロントの
+  ホスト画面は、WebSocket が（再）接続できたときに保持しているルームIDへ自動で
+  `reattachRoom` を送ります。ホストが戻らない場合でもルームは TTL で自動失効します。
+- ブロードキャストされる `state` メッセージには **`hostConnected`（真偽値）** を含めます。
+  ホスト離席中（`false`）は、参加者画面に「ホストが一時的に離席中です」と表示します。
+- **参加者の切断では PLAYER# 行を削除します**（明示的な設計判断）。タブを閉じた参加者が
+  ライブ順位表に「幽霊エントリ」として TTL（約 6 時間）まで残らないようにするためです。
+  参加者は認証不要で再参加が安価なため、名前ごとの再接続復帰は用意していません。行の削除で
+  同じ表示名の再利用も可能になります。
+
+### アーキテクチャの追加点（WebSocket + ws Lambda + DynamoDB TTL）
+
+既存の HTTP API 構成に対して、**追加**（additive）でリアルタイム対戦の基盤を足しています。
+既存の HTTP API・その 7 ルート・JWT オーソライザー・個人プレイ・管理者機能・履歴・
+シードは**一切変更していません**。
+
+```
+[ブラウザ / SPA（index.html）]
+   │  WebSocket（wss://）
+   ▼
+[API Gateway WebSocket API (v2)]
+   │   ├── $connect / $disconnect / $default
+   │   └── createRoom / reattachRoom / joinRoom / startGame / submitAnswer / nextQuestion / endGame
+   ▼
+[AWS Lambda（ws.ts / Node.js 22, ARM64 / Graviton）]
+   │   ホスト JWT 検証・サーバー採点・状態遷移・全員へブロードキャスト
+   ▼
+[Amazon DynamoDB（既存のシングルテーブルを再利用 / TTL 有効）]
+```
+
+- **API Gateway v2 WebSocket API**（新規）: 双方向のリアルタイム通信を担います。ルートは
+  `$connect` / `$disconnect` / `$default` に加え、`createRoom` / `reattachRoom` / `joinRoom` /
+  `startGame` / `submitAnswer` / `nextQuestion` / `endGame` の各アクション（JSON ボディの
+  `action` フィールドでルーティング）。ステージ名は `prod`（自動デプロイ）です。
+- **専用の ws Lambda**（新規・`lambda/ws.ts`）: ApiFunction と同じ構成（Node.js 22 /
+  ARM64・メモリ 256 MB・タイムアウト 10 秒）です。サーバー権威（server-authoritative）の
+  ゲーム状態機械（`lobby` → `in_question` → `between` → …→ `finished`）を実行し、
+  API Gateway Management API（`PostToConnection`）で各接続へ状態を配信します。
+- **DynamoDB は既存のシングルテーブルを再利用**: 対戦用の項目は名前空間を分けて格納します
+  （`pk=ROOM#<roomId>` の `META` / `CONN#<connectionId>` / `PLAYER#<name>`、および
+  `pk=CONN#<connectionId>` の逆引き）。既存の `QUIZ#` 項目には手を加えていません。
+  各対戦用項目には数値の **TTL 属性 `ttl`**（epoch 秒・作成から約 6 時間後）を設定し、
+  ルーム/接続/プレイヤーは**自動的に失効・削除**されます（クリーンアップのための常時
+  稼働リソースは不要）。既存の `QUIZ#` 項目は `ttl` を持たないため失効しません。
+
+### コスト面（アイドル時ほぼゼロ）
+
+リアルタイム対戦の追加後も「**待機中は課金されない**」方針は変わりません。
+
+- **DynamoDB オンデマンド（PAY_PER_REQUEST）**: 既存テーブルを再利用。固定料金なし。
+- **API Gateway WebSocket API**: **接続時間と受信メッセージ**に対する従量課金で、接続が
+  無ければ料金は発生しません。
+- **ws Lambda（ARM64）**: 呼び出し回数と実行時間のみの課金でゼロにスケール。
+- **VPC / NAT なし**: 時間課金される常時起動リソースは使いません。
+- **TTL で自動掃除**: 期限切れのルーム/接続/プレイヤー項目は DynamoDB の TTL が無料で
+  削除するため、掃除用の常駐処理は不要です。
+
+要するに、**誰も対戦していない時間帯の追加コストはほぼゼロ**です。
+
+---
+
 ## デプロイ後のセットアップ手順（順番厳守）
 
 新規に構築する運用者は、**必ず次の順番**で作業してください。順番を飛ばすと
@@ -214,6 +340,7 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
    - `UserPoolId` — Cognito User Pool ID
    - `UserPoolClientId` — Cognito アプリクライアント ID
    - `UserPoolHostedUiDomain` — Cognito Hosted UI のベース URL
+   - `WebSocketEndpoint` — リアルタイム対戦の WebSocket エンドポイント（`wss://...` / `prod` ステージ）
 
 2. **最初の管理者ユーザーを作成する。**
    セルフサインアップは無効なので、運用者が CLI で作成します。
@@ -242,6 +369,8 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
      （例: `https://xxxx.execute-api.<region>.amazonaws.com/api`）
    - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain` → `VITE_COGNITO_DOMAIN`
    - `COGNITO_CLIENT_ID` = `UserPoolClientId` → `VITE_COGNITO_CLIENT_ID`
+   - `WS_URL` = `WebSocketEndpoint` → `VITE_WS_URL`（リアルタイム対戦の WebSocket 接続先）
+     （例: `wss://xxxx.execute-api.<region>.amazonaws.com/prod`）
    これらの環境変数名は `amplify.yml` が参照する名前と一致している必要があります。
    フロントエンドは Vite のマルチページビルドで、公開アプリ（`/index.html`）と管理者
    ページ（`/admin.html`）の 2 つを**実体のある静的ファイル**として出力します。どちらも
@@ -327,6 +456,8 @@ npx cdk deploy
 - `UserPoolId` — Cognito User Pool ID（管理者ユーザー作成に使用）
 - `UserPoolClientId` — Cognito アプリクライアント ID（パブリック／ブラウザ用）
 - `UserPoolHostedUiDomain` — Cognito Hosted UI のベース URL
+- `WebSocketEndpoint` — リアルタイム対戦の WebSocket エンドポイント（`wss://...` / `prod` ステージ）。
+  Amplify 環境変数 `WS_URL` に設定する（`amplify.yml` が `VITE_WS_URL` にマッピング）
 
 ### 2. 最初の管理者ユーザーを作成（Cognito ブートストラップ）
 
@@ -363,6 +494,8 @@ aws cognito-idp admin-set-user-password \
    - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain` → `VITE_COGNITO_DOMAIN`
      （例: `https://<prefix>.auth.<region>.amazoncognito.com`）
    - `COGNITO_CLIENT_ID` = `UserPoolClientId` → `VITE_COGNITO_CLIENT_ID`
+   - `WS_URL` = `WebSocketEndpoint` → `VITE_WS_URL`（リアルタイム対戦の WebSocket 接続先）
+     （例: `wss://xxxx.execute-api.<region>.amazonaws.com/prod`）
 4. **SPA 書き換えルールは不要**です。フロントエンドは Vite の**マルチページ**ビルドで、
    公開アプリ（`/index.html`）と管理者ページ（`/admin.html`）の 2 つを実体のある静的
    ファイルとして出力します。どちらも実ファイルなので、Amplify コンソールで「全パスを
@@ -389,6 +522,15 @@ npx cdk deploy \
 
 これにより `https://main.<appId>.amplifyapp.com/admin.html` が Hosted UI の
 `redirect_uri` / `logout_uri` として許可されます（コンソールから手動で更新しても可）。
+あわせて、リアルタイム対戦のホストが**公開アプリ（`/index.html`）**からログインできるよう、
+`https://main.<appId>.amplifyapp.com/index.html` も同じアプリクライアントのコールバック/
+ログアウト URL に**追加**されます（既存の `/admin.html` エントリはそのまま維持されます）。
+
+> **リアルタイム対戦の `WS_URL` について**: CDK デプロイで得た `WebSocketEndpoint`
+> （`wss://...` / `prod` ステージ）を Amplify 環境変数 `WS_URL` に設定してから、
+> フロントエンドを**再デプロイ**してください（`amplify.yml` が `WS_URL` を `VITE_WS_URL` に
+> マッピングしてビルドに注入します）。未設定の場合、対戦の WebSocket 接続だけが機能せず、
+> 個人プレイや管理者機能には影響しません。
 
 > **CORS について**: API の CORS `allowOrigins` は既定で Amplify ドメイン
 > `https://main.d2uwsqpk41y7so.amplifyapp.com` に限定済みです（以前の `*` から変更）。別の
@@ -406,6 +548,12 @@ npx cdk deploy \
 - `/admin.html` を開き、Cognito Hosted UI でログイン → クイズを登録できることを確認します。
 - 未ログインの状態で `POST /api/admin/quizzes` を叩くと 401/403 で拒否されることを確認します
   （例: `curl -i -X POST <ApiEndpoint>/api/admin/quizzes -d '{}'`）。
+- **リアルタイム対戦**: クイズ一覧画面の「リアルタイム対戦」からホストとして Cognito
+  ログイン → 登録済みクイズを選んでルーム作成 → 表示された**ルームID**を控えます。別の
+  ブラウザ（またはシークレットウィンドウ）で参加者として**表示名＋ルームID**で参加し
+  （ログイン不要）、ホストが開始・進行すると、両者に同じ問題が同期表示され、参加者名と
+  スコアのライブ順位表が更新されることを確認します。`WS_URL`（`VITE_WS_URL`）が正しく
+  設定されている必要があります。
 
 ---
 
@@ -423,6 +571,7 @@ npm install
 # 環境変数のひな形をコピーして実値を設定
 cp .env.example .env.local
 # .env.local を編集し、VITE_API_BASE / VITE_COGNITO_DOMAIN / VITE_COGNITO_CLIENT_ID を設定
+# （リアルタイム対戦を試す場合は VITE_WS_URL に WebSocketEndpoint（wss://.../prod）も設定）
 
 # 開発サーバー（既定 http://localhost:5173）
 npm run dev
@@ -497,6 +646,7 @@ env -u NODE_OPTIONS npm run build   # tsc 型チェック + Vite バンドル。
 | **DynamoDB オンデマンド (PAY_PER_REQUEST)** | プロビジョニング済みキャパシティを持たないため、**アイドル時の固定料金がゼロ**。リクエスト単位の従量課金。 |
 | **AWS Lambda (ARM64 / Graviton)** | 呼び出し回数と実行時間のみの課金で、**リクエストが無ければ料金は発生せずゼロにスケール**。ARM64 は x86 より単価が安い。メモリ 256 MB / タイムアウト 10 秒に抑制。 |
 | **API Gateway HTTP API (v2)** | 同等の REST API より**リクエスト単価が安い**。 |
+| **API Gateway WebSocket API (v2)** | リアルタイム対戦用。**接続時間と受信メッセージのみ**の従量課金で、接続が無ければ料金は発生しない。固定料金なし。 |
 | **Amazon Cognito User Pool** | ユーザー数に応じた無料枠があり、**アイドル時の固定料金は発生しない**。JWT オーソライザーもリクエスト時のみ動作。 |
 | **AWS Amplify Hosting** | フロント配信は Amplify に集約。課金は主に**ビルド時間と配信（ストレージ/転送）**のみ。Vite の npm ビルドは高速で、依存関係を最小限に抑えてビルド時間を短縮。以前の **S3 + CloudFront によるフロント配信は廃止**（冗長かつ 403/404 書き換えの問題があったため）。 |
 | **VPC / NAT ゲートウェイ なし** | NAT ゲートウェイは**アイドルでも時間課金**が発生するため使用しない。 |
@@ -516,10 +666,16 @@ env -u NODE_OPTIONS npm run build   # tsc 型チェック + Vite バンドル。
   すべて JWT オーソライザーで保護され公開ルートは未保護であること、Cognito User Pool
   （セルフサインアップ無効）とパブリックアプリクライアントがあること、**CloudFront / S3 の
   フロント配信リソースが存在しないこと**、そして **HTTP API の CORS が `authorization` ヘッダを
-  許可していること**。
+  許可していること**。リアルタイム対戦の追加分として、**WebSocket API（ProtocolType
+  `WEBSOCKET`）**が存在すること、**2 つ目の Lambda（ws ハンドラ）が ARM64 であること**、
+  その IAM ポリシーが `execute-api:ManageConnections` を許可していること、DynamoDB の
+  **TTL が属性 `ttl` で有効**であること、**`WebSocketEndpoint` の CfnOutput** があることも
+  検証します（既存の HTTP API の 7 ルート + 1 JWT オーソライザーは不変のまま）。
 - `test/handler.test.ts` — Lambda ソースから **実際にエクスポートされている純粋関数**
   （`scoreAnswers` など）を import して検証します。実運用コードをそのまま呼ぶため、
-  ロジックが壊れればテストは失敗します。
+  ロジックが壊れればテストは失敗します。リアルタイム対戦では `lambda/ws.ts` の純粋関数
+  （ルームID生成、順位表の集計、ゲーム状態遷移、参加者向け問題への射影が `answerIndex` を
+  含まないこと、回答採点、参加入力の検証）も同様に import して検証します。
 
 ---
 

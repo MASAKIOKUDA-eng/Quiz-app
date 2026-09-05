@@ -20,3 +20,8 @@ export const COGNITO_DOMAIN = (import.meta.env.VITE_COGNITO_DOMAIN ?? '').replac
 
 // Cognito のパブリックアプリクライアント ID。
 export const COGNITO_CLIENT_ID = import.meta.env.VITE_COGNITO_CLIENT_ID ?? '';
+
+// リアルタイム対戦の WebSocket エンドポイント（wss://...）。末尾スラッシュは除去。
+// CDK CfnOutput の WebSocketEndpoint を Amplify 環境変数 WS_URL に設定し、
+// amplify.yml が WS_URL -> VITE_WS_URL にマッピングする。未設定なら空文字。
+export const WS_URL = (import.meta.env.VITE_WS_URL ?? '').replace(/\/$/, '');
