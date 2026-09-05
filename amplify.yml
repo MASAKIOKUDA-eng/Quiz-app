@@ -18,8 +18,9 @@
 #   API_BASE          -> VITE_API_BASE
 #   COGNITO_DOMAIN    -> VITE_COGNITO_DOMAIN
 #   COGNITO_CLIENT_ID -> VITE_COGNITO_CLIENT_ID
+#   WS_URL            -> VITE_WS_URL
 # Amplify コンソールの環境変数名は従来どおり（API_BASE / COGNITO_DOMAIN /
-# COGNITO_CLIENT_ID）なので、コンソール側の再設定は不要です。
+# COGNITO_CLIENT_ID）に加え、リアルタイム対戦用に WS_URL を設定します。
 #
 # 必要な環境変数（Amplify コンソール > アプリケーションの設定 > 環境変数）:
 #   - API_BASE          = CDK CfnOutput の ApiEndpoint + '/api'
@@ -27,6 +28,8 @@
 #   - COGNITO_DOMAIN    = CDK CfnOutput の UserPoolHostedUiDomain
 #                         例: https://<prefix>.auth.<region>.amazoncognito.com
 #   - COGNITO_CLIENT_ID = CDK CfnOutput の UserPoolClientId
+#   - WS_URL            = CDK CfnOutput の WebSocketEndpoint（リアルタイム対戦）
+#                         例: wss://xxxx.execute-api.<region>.amazonaws.com/prod
 #
 # ルーティング: マルチページ構成のため、公開アプリは /index.html、管理者ページは
 # /admin.html という実体のある静的ファイルとして配信されます。両方とも実ファイル
@@ -48,6 +51,7 @@ applications:
               VITE_API_BASE=${API_BASE}
               VITE_COGNITO_DOMAIN=${COGNITO_DOMAIN}
               VITE_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
+              VITE_WS_URL=${WS_URL}
               EOF
             - echo "Generated frontend/.env:"
             - cat .env

@@ -904,6 +904,215 @@ a:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* --- リアルタイム対戦（②） --- */
+/*
+ * 役割選択・ホストロビー・参加者参加・ライブ対戦・順位表。配色や質感は
+ * すべて既存トークン（--primary / --card / --muted など）と既存クラス
+ * （.card / .btn / .quiz-actions / .progress / .option / .mode-option）に委ねる。
+ */
+.battle {
+  animation: card-in var(--dur) var(--ease) both;
+}
+
+.battle-lead,
+.battle-me {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin: 0 0 1rem;
+}
+
+.battle-me {
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* 接続ステータスのバッジ（中央寄せ）。 */
+.battle-conn {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--card-border);
+  background: var(--card);
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0 auto 1rem;
+}
+
+.battle-conn-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.battle-conn-open .battle-conn-dot {
+  background: var(--correct);
+}
+
+.battle-conn-connecting .battle-conn-dot {
+  background: var(--primary);
+  animation: pulse 1.4s var(--ease) infinite;
+}
+
+.battle-conn-closed .battle-conn-dot,
+.battle-conn-error .battle-conn-dot {
+  background: var(--incorrect);
+}
+
+.battle-conn-error,
+.battle-conn-closed {
+  color: var(--incorrect);
+  border-color: var(--incorrect);
+}
+
+/* ロビー・フォームなどのコンテナは中央寄せ。 */
+.battle-roles,
+.battle-host,
+.battle-participant,
+.battle-join {
+  animation: card-in var(--dur) var(--ease) both;
+}
+
+/* 共有ルーム ID カード。 */
+.battle-roomid-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  text-align: center;
+}
+
+.battle-roomid-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.battle-roomid-value {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+  /* ルーム ID は読み違えを避けるため等幅で表示する。 */
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+.battle-roomid-note {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* 参加フォームのルーム ID 入力は大文字・等幅で見やすく。 */
+.battle-room-input {
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+/* ライブ設問。 */
+.battle-live {
+  margin-top: 0.5rem;
+}
+
+.battle-question-text {
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+  line-height: 1.5;
+}
+
+.battle-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.battle-phase-note {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin: 1rem 0;
+}
+
+/* ライブ順位表。 */
+.battle-scoreboard {
+  margin-top: 1.25rem;
+}
+
+.battle-scoreboard-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+}
+
+.battle-scoreboard-empty {
+  text-align: center;
+  color: var(--muted);
+  margin: 1rem 0;
+}
+
+.battle-ranking {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  counter-reset: none;
+}
+
+.battle-ranking-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  animation: item-in var(--dur) var(--ease) both;
+}
+
+/* 自分の行を強調する（参加者ビュー）。 */
+.battle-ranking-me {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.battle-rank {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.battle-rank-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.battle-rank-score {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- キーフレーム --- */
 @keyframes card-in {
   from {
