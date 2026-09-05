@@ -1,0 +1,7 @@
+{
+  "task_id": "task-one-by-one-mode",
+  "task_description": "Add a one-question-at-a-time (一問一答) answering mode to the public React quiz app, in ADDITION to the existing all-at-once (一括表示) mode, chosen by the user when starting a quiz. Both modes share the SAME selected state and the SAME server-side scoring / result / localStorage-history path (single submitAnswers call, single QuizResult screen, single history.append). The public payload has no answerIndex, so there is NO mid-quiz local grading; correctness is only revealed on the existing result screen. Frontend-only, no new dependencies (react + react-dom only, no router), no lockfile; backend, api.ts contract, amplify.yml, Cognito/auth, and admin page are untouched. Includes CSS using existing design tokens and a short README note. Commit onto branch feat/one-by-one-mode; do not push.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}
