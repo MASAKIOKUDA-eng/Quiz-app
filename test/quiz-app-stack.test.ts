@@ -162,6 +162,36 @@ describe('QuizAppStack', () => {
     template.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
   });
 
+  test('registers ROOT-canonicalized callback/logout URLs (no /index.html)', () => {
+    // Fix: the realtime battle HOST lives in the PUBLIC app, which Amplify
+    // serves at the ROOT, so the browser lands on `origin + '/'` after login.
+    // The Cognito app client must trust that exact ROOT URL (trailing slash,
+    // no '/index.html'), alongside the admin page's '/admin.html'. With the
+    // default `adminAppBaseUrl` (http://localhost:8080) and
+    // `includeLocalhostCallback` defaulting to true, the DECIDABLE localhost
+    // entries are literal strings we can assert on. This test would FAIL if
+    // the '/index.html' -> '/' change were reverted.
+    template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      CallbackURLs: Match.arrayWith([
+        'http://localhost:8080/admin.html',
+        'http://localhost:8080/',
+      ]),
+      LogoutURLs: Match.arrayWith([
+        'http://localhost:8080/admin.html',
+        'http://localhost:8080/',
+      ]),
+    });
+    // The never-matched '/index.html' entries must be gone from both lists.
+    template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      CallbackURLs: Match.not(
+        Match.arrayWith(['http://localhost:8080/index.html']),
+      ),
+      LogoutURLs: Match.not(
+        Match.arrayWith(['http://localhost:8080/index.html']),
+      ),
+    });
+  });
+
   test('defines a JWT authorizer for the admin route', () => {
     template.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
     template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {

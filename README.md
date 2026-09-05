@@ -248,14 +248,22 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
 ### 認証モデル（ホストのみ Cognito / 参加者はログイン不要）
 
 - **ホスト（ルーム作成者）**は、既存の **Amazon Cognito 管理者アカウント**で
-  **Hosted UI** からログインする必要があります。ホスト用の画面は**公開アプリ
-  （`/index.html`）**内にあり、ルーム作成・開始・進行・終了の各操作では毎回 Cognito の
-  ID トークンをサーバーへ渡し、ws Lambda が発行元（issuer）・オーディエンス（アプリ
-  クライアント ID）・署名（プール JWKS による RS256 検証）を検証します。
+  **Hosted UI** からログインする必要があります。ホスト用の画面は**公開アプリ**内にあり、
+  ルーム作成・開始・進行・終了の各操作では毎回 Cognito の ID トークンをサーバーへ渡し、
+  ws Lambda が発行元（issuer）・オーディエンス（アプリクライアント ID）・署名
+  （プール JWKS による RS256 検証）を検証します。
 - ホストのログインが公開アプリへ戻れるように、Cognito アプリクライアント
-  （`AdminAppClient`）のコールバック/ログアウト URL に **`/index.html`** を追加しています
-  （従来の `/admin.html` のエントリはそのまま残しています）。ローカル開発では
-  `includeLocalhostCallback` が `true` の間 `http://localhost:8080/index.html` も許可されます。
+  （`AdminAppClient`）のコールバック/ログアウト URL に **ルート（`/`、末尾スラッシュ付き）**
+  を登録しています（従来の `/admin.html` のエントリはそのまま残しています）。公開アプリは
+  Amplify が**ルート URL**（`origin + '/'`）で配信するため、ログイン後にブラウザが着地するのは
+  `/index.html` ではなく `/` です。Cognito は `redirect_uri` の**完全一致**を要求するので、
+  フロントエンド（`frontend/src/auth.ts` の `publicRedirectUri()` = `origin + '/'`、
+  `adminRedirectUri()` = `origin + '/admin.html'`）と CDK
+  （`lib/quiz-app-stack.ts` の `callbackUrls` / `logoutUrls`）の文字列を
+  **byte-for-byte で一致**させています。以前登録していた `/index.html` はブラウザの実際の
+  `/` リダイレクトと一致せず `redirect_mismatch` の原因になっていたため削除しました。
+  ローカル開発では `includeLocalhostCallback` が `true` の間 `http://localhost:8080/`
+  と `http://localhost:8080/admin.html` も許可されます。
 - **参加者**は**認証不要**です。表示名（1〜40 文字）とルームIDのみで参加します。
   参加者からのメッセージにトークンは含まれません。
 
@@ -377,22 +385,39 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
    実ファイルなので、**SPA 用の書き換えルール（全パスを `/index.html` にリライト）は不要**です。
    デプロイ後、Amplify が払い出したドメイン（例: `https://main.<appId>.amplifyapp.com`）を控えます。
 
-4. **Amplify ドメインが判明したら CDK スタックを再デプロイする。**
-   `adminAppBaseUrl` パラメータに手順 3 の Amplify ドメインを渡して再デプロイし、
-   Cognito アプリクライアントのコールバック/ログアウト URL に実ドメインを反映します。
+4. **Amplify ドメインが判明したら CDK スタックを再デプロイし、フロントエンドも再ビルド/再デプロイする。**
+   ホストのログインが `redirect_mismatch` で失敗する問題を直すには、**両方**が必要です。
+   片方だけでは `redirect_uri` が一致せず、失敗したままになります。
+
+   **(1) バックエンド（Cognito のコールバック/ログアウト URL 更新）を再デプロイする。**
+   `adminAppBaseUrl` パラメータに手順 3 の Amplify ドメインを**明示的に**渡します。渡さないと
+   既定値（`http://localhost:8080`）に戻ってしまい、これがログイン失敗の一因でした。
    本番では `-c includeLocalhostCallback=false` も付けて、localhost へのリダイレクトを
    信頼しないようにします。
    ```bash
    npx cdk deploy \
-     --parameters adminAppBaseUrl=https://main.<appId>.amplifyapp.com \
+     --parameters adminAppBaseUrl=https://main.d2uwsqpk41y7so.amplifyapp.com \
      -c includeLocalhostCallback=false
    ```
-   これで `https://main.<appId>.amplifyapp.com/admin.html` が Hosted UI の
-   `redirect_uri` / `logout_uri` として許可されます。
+   `adminAppBaseUrl` には実際の Amplify ドメインを指定してください。これで
+   `https://main.<appId>.amplifyapp.com/admin.html`（管理者ページ）と
+   `https://main.<appId>.amplifyapp.com/`（公開アプリ = ホスト、**ルート**）が Hosted UI の
+   `redirect_uri` / `logout_uri` として許可されます。ホストは `/index.html` ではなく
+   サイトの**ルート**（`origin + '/'`）に戻ります。
+
+   **(2) フロントエンドを再ビルドして Amplify に再デプロイする。**
+   `frontend/src/auth.ts` の `publicRedirectUri()` / `adminRedirectUri()` が生成する
+   `redirect_uri` は、上記 Cognito 登録値と byte-for-byte で一致する必要があるため、
+   フロントエンドのビルドも更新します。
+   ```bash
+   cd frontend && npm install && npm run build
+   ```
+   ビルド後、Amplify で再デプロイします（Git 連携なら該当ブランチへの push で自動ビルド）。
    > **補足**: React フロントエンドは Vite の**マルチページ**構成で、管理者ページは
-   > 実体のある静的ファイル `/admin.html` として配信されます。そのため管理者ページ自身の
-   > URL（origin + `/admin.html`）は、CDK が Cognito に登録済みのコールバック/ログアウト
-   > URL と**完全一致**します。**CDK の変更も Amplify の SPA 書き換えルールも不要**です。
+   > 実体のある静的ファイル `/admin.html` として、公開アプリは**ルート**（`/`）として配信されます。
+   > 管理者ページの `redirect_uri`（`origin + '/admin.html'`）と、公開アプリ/ホストの
+   > `redirect_uri`（`origin + '/'`）は、いずれも CDK が Cognito に登録した
+   > コールバック/ログアウト URL と**完全一致**します。**Amplify の SPA 書き換えルールは不要**です。
 
 5. **（任意）CORS の許可オリジンを変更する。**
    CORS の `allowOrigins` は既定で Amplify ドメイン `https://main.d2uwsqpk41y7so.amplifyapp.com`

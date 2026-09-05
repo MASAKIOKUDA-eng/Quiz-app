@@ -18,6 +18,7 @@ import {
   clearToken,
   loginUrl,
   logoutUrl,
+  adminRedirectUri,
 } from '../auth';
 import { COGNITO_DOMAIN, COGNITO_CLIENT_ID } from '../config';
 
@@ -133,14 +134,16 @@ export default function AdminPage() {
       });
       return;
     }
-    window.location.assign(loginUrl());
+    // 管理画面は Amplify が `/admin.html` で配信するため、redirect_uri は
+    // origin + '/admin.html'（Cognito 登録済みの正準文字列）を渡す。
+    window.location.assign(loginUrl(adminRedirectUri()));
   }
 
   function handleLogout(): void {
     clearToken();
     setIdToken(null);
     setExpiresAt(0);
-    window.location.assign(logoutUrl());
+    window.location.assign(logoutUrl(adminRedirectUri()));
   }
 
   // 401（AuthError）共通処理: トークンをクリアしてログイン画面に戻す。

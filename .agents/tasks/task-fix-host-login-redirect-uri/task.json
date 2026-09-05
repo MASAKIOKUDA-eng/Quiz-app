@@ -1,0 +1,7 @@
+{
+  "task_id": "task-fix-host-login-redirect-uri",
+  "task_description": "Fix the Cognito redirect_mismatch that fails the realtime-battle HOST login (admin-page login works). Root cause: the battle host lives in the public app which Amplify serves at the ROOT URL, so auth.ts sends redirect_uri = origin + '/', but Cognito only trusts origin + '/index.html' and '/admin.html'. Fix by canonicalizing the host redirect to the ROOT (origin + '/') in the frontend AND registering that exact string in the CDK Cognito app client, keeping '/admin.html' working. Both sides must match byte-for-byte. Update the CDK jest test and README deploy notes.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}
