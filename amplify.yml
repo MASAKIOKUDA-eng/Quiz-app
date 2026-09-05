@@ -51,5 +51,10 @@ frontend:
     files:
       - '**/*'
   cache:
+    # 依存関係をキャッシュしてビルドを高速化する。再現性は、npm install が生成し
+    # コミットする package-lock.json（frontend/package-lock.json）に依存する点に注意。
+    # lockfile が無いままだと、キャッシュ済み node_modules と npm install の結果が
+    # ビルド間でずれる可能性がある。lockfile をコミットすれば npm ci が使われ、
+    # 依存関係が固定される。
     paths:
       - frontend/node_modules/**/*

@@ -13,6 +13,7 @@ import {
   loginUrl,
   logoutUrl,
 } from '../auth';
+import { COGNITO_DOMAIN, COGNITO_CLIENT_ID } from '../config';
 
 // ---- フォームの状態モデル -----------------------------------------------
 
@@ -94,6 +95,16 @@ export default function AdminPage() {
   // ---- 認証操作 ----------------------------------------------------------
 
   function handleLogin(): void {
+    // Cognito 設定が未注入だと loginUrl() は不正な URL になるため、
+    // リダイレクトせずにエラーメッセージを表示する（旧 admin.js の警告を踏襲）。
+    if (!COGNITO_DOMAIN || !COGNITO_CLIENT_ID) {
+      setStatus({
+        message:
+          'Cognito の設定（VITE_COGNITO_DOMAIN / VITE_COGNITO_CLIENT_ID）が未設定です。frontend/.env（Amplify の環境変数）を確認してください。',
+        isError: true,
+      });
+      return;
+    }
     window.location.assign(loginUrl());
   }
 
