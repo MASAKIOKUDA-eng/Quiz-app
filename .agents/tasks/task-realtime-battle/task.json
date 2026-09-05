@@ -1,0 +1,7 @@
+{
+  "task_id": "task-realtime-battle",
+  "task_description": "Add a realtime multiplayer quiz battle (リアルタイム対戦, feature ②) to the cost-minimal serverless quiz app. A Cognito-authenticated HOST creates a room from an existing registered quiz and shares a room ID; unauthenticated PARTICIPANTS join with a display name + room ID; the host starts and advances question by question; everyone sees the same synced question and a live scoreboard of participant names + individual scores. Transport is a NEW API Gateway v2 WebSocket API + a dedicated ARM64 ws Lambda + the existing DynamoDB single table (with TTL for cleanup), keeping the cost-minimal posture (on-demand DynamoDB, no VPC/NAT). Scoring is server-side reusing the stored answerIndex, which is never sent to participant clients. Additive only: the existing HTTP API, single-player flows, admin flows, history, and seeds are preserved. Frontend uses only the native browser WebSocket (deps stay exactly react + react-dom). Commit onto branch feat/realtime-battle; do not push or open a PR.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}

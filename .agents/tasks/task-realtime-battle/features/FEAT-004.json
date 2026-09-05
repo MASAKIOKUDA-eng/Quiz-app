@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-004",
+  "type": "docs",
+  "description": "Update the Japanese README to document the realtime multiplayer battle feature end to end: architecture (API Gateway WebSocket API + ws Lambda + DynamoDB with TTL, cost-minimal posture), the host-auth model (existing Cognito Hosted UI; the host logs in from the public app), participant join by room ID (no login, display name only), the game flow, the new WS_URL / VITE_WS_URL Amplify env var, the new WebSocketEndpoint CfnOutput, and the updated deploy/verification steps. Depends on FEAT-002 and FEAT-003 being implemented so the documented names/outputs match the code.",
+  "status": "pending",
+  "steps": [
+    "Add a new README.md section (Japanese) describing the realtime battle (リアルタイム対戦): the flow (ホストがルーム作成 -> ルームID共有 -> 参加者が名前+ルームIDで参加 -> ホスト開始 -> 同じ問題を同期配信 -> 参加者個人スコアのライブ順位表), that questions come from the existing registered quizzes, and that scoring is server-side (the correct answerIndex is never sent to participant clients).",
+    "Document the architecture additions: a NEW API Gateway v2 WebSocket API + a dedicated ARM64 ws Lambda + reuse of the existing DynamoDB single table with a TTL attribute (ttl) for auto-expiring rooms/connections; emphasize the cost-minimal posture (on-demand DynamoDB, no VPC/NAT, connection/duration billing only, idle ~zero). Note it is additive and does not change the existing HTTP API.",
+    "Document the host-auth model: the host must log in with the existing Cognito admin account via Hosted UI (now also allowed to redirect back to the public app /index.html); participants are unauthenticated and only provide a display name + room ID. Note the AdminAppClient callback/logout URLs now include /index.html.",
+    "Document the new Amplify env var WS_URL (mapped by amplify.yml to VITE_WS_URL) set to the CDK WebSocketEndpoint CfnOutput, alongside the existing API_BASE / COGNITO_DOMAIN / COGNITO_CLIENT_ID vars. Update the deploy-after-CDK and Amplify-env-var sections accordingly.",
+    "Update the CfnOutputs list and the deploy/verification steps to include WebSocketEndpoint and the commands: root `npm ci && npm run build && npm test && npx cdk synth` then `npx cdk deploy`; frontend `cd frontend && npm install && npm run build`; then set the WS_URL Amplify env var and redeploy."
+  ],
+  "acceptance_criteria": [
+    "README.md has a Japanese section describing the realtime battle flow, host-auth (Cognito), participant join-by-roomID (no login), and server-side scoring (answerIndex never exposed).",
+    "README.md documents the WebSocket API + ws Lambda + DynamoDB TTL architecture and the cost-minimal posture, and states the feature is additive to the existing HTTP API.",
+    "README.md documents the new WS_URL / VITE_WS_URL Amplify env var and the WebSocketEndpoint CfnOutput, and the deploy/verification steps reflect them.",
+    "The documented env var names, output names, and route/flow names match the code delivered in FEAT-002 and FEAT-003."
+  ],
+  "verification": [
+    "Read README.md and confirm the new section is internally consistent with lib/quiz-app-stack.ts (WebSocketEndpoint output, ttl), amplify.yml (WS_URL -> VITE_WS_URL), config.ts (VITE_WS_URL), and the ws action/message contract.",
+    "Confirm no non-README source behavior was changed by this docs feature (git diff limited to README.md, aside from prior features)."
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
