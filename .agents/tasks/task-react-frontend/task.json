@@ -1,0 +1,27 @@
+{
+  "task_id": "task-react-frontend",
+  "task_description": "Rebuild the Quiz App frontend as a modern, rich React + Vite + TypeScript SPA (user chose Option B), replacing the dependency-free vanilla-JS SPA. Preserve 100% of existing functionality and the EXACT API contract and Cognito Hosted UI auth model (no backend/CDK/Lambda changes). Deliver a card-based quiz list, progress indicator, engaging result screen with per-question feedback, responsive layout, and dark mode for the public flow; and the full authenticated admin quiz-builder with identical validation and answerIndex-over-non-empty-options semantics. Update amplify.yml for an npm Vite build with VITE_* env-var injection, update .gitignore and the Japanese README, and remove the old vanilla files. Commit onto feat/cdk-scaffold; do NOT push.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "not_run_in_sandbox",
+    "tests": "not_run_in_sandbox",
+    "test_quality": "n/a",
+    "docker_build": "skipped",
+    "semantic_review": "APPROVED (v2, 2026-09-05-153000-review.md). v1 (2026-09-05-150000-review.md) was NEEDS_CHANGES on one blocking build issue, fixed in commit 287a008 and re-verified in v2.",
+    "summary": "INTEGRATIONS_ONLY sandbox: public npm registry returns 403, so `cd frontend && npm install && npm run build` (tsc -b + vite build) and the root CDK `npm ci && npm run build && npm test` cannot execute here. Verified correct-by-construction instead: frontend/package.json + both tsconfig JSON valid; amplify.yml well-formed with API_BASE/COGNITO_*->VITE_* mapping and baseDirectory frontend/dist; Vite multi-page inputs (index.html + admin.html) declared; api.ts matches lambda/index.ts contract exactly; auth.ts + AdminPage reproduce the Cognito implicit-grant flow and the admin.js validation/answerIndex-over-non-empty-options semantics byte-identically; HomePage builds answers:number[] with -1 for unanswered and renders a rich score/per-question feedback screen; old vanilla app.js/admin.js/config.js/top-level styles.css removed with no dangling references; backend (bin/lib/lambda/test) untouched. The blocking build risk (tsconfig.node.json composite+noEmit breaking `tsc -b`) was found in review v1, fixed in 287a008 (noEmit removed, composite kept), and re-verified in v2. Also fixed: AdminPage handleLogin guards empty Cognito config; amplify.yml cache caveat documented.",
+    "networked_machine_followups": "User must run on their networked machine (final gate, could not run in-sandbox due to npm 403): (1) `cd frontend && npm install && npm run build` and confirm dist/index.html AND dist/admin.html emit; (2) root `npm ci && npm run build && npm test` still passes (backend untouched). Non-blocking reproducibility follow-up: committing the generated frontend/package-lock.json lets the Amplify build use `npm ci` and makes the cached node_modules deterministic. Amplify console follow-up: since the admin page is at /admin.html (a real static file), no SPA rewrite is required; the existing Cognito callback/logout URLs (<baseUrl>/admin.html) need no change."
+  },
+  "review_fixes": {
+    "iteration": 1,
+    "review_file": "2026-09-05-150000-review.md",
+    "findings": [
+      "Issue 1 (BLOCKING) FIXED: Removed `noEmit: true` from frontend/tsconfig.node.json, keeping `composite: true`. This matches the canonical Vite react-ts template and unblocks `tsc -b` (was erroring TS6379/TS6310 'composite/referenced project may not disable emit'), so `tsc -b && vite build` now succeeds correct-by-construction. Left the app frontend/tsconfig.json `noEmit: true` as-is (correct: non-composite, and allowImportingTsExtensions requires it).",
+      "Issue 2 (minor) FIXED: AdminPage.handleLogin now guards against empty Cognito config. If COGNITO_DOMAIN or COGNITO_CLIENT_ID is empty it shows an error-status message referencing the VITE_* env vars / frontend/.env (adapted from the old admin.js config.js wording) and does NOT redirect to a malformed loginUrl().",
+      "Issue 3 (minor) RESOLVED (choice: keep cache + comment): Kept amplify.yml's frontend/node_modules cache but added a comment noting reproducibility depends on the generated package-lock.json. Chose keeping the cache (lower risk: preserves build speed; drift only matters until the user's npm install commits a lockfile, after which `npm ci` pins deps). Did NOT hand-write a lockfile per task constraint.",
+      "Issue 4 (verification) DOCUMENTED: No in-sandbox build possible (npm registry 403, INTEGRATIONS_ONLY) — environment constraint, not a code defect. After the tsconfig fix the user must run `cd frontend && npm install && npm run build` on their networked machine and confirm both dist/index.html and dist/admin.html emit, then smoke-test both flows against a deployed API. No further code change required.",
+      "Scope: backend/CDK/Lambda (bin/, lib/, lambda/, test/), the API contract, admin validation semantics, and the Cognito flow were left intact per the review's approval."
+    ]
+  }
+}

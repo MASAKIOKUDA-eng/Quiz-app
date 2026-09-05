@@ -16,8 +16,9 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
 - デフォルトの問題は「**AWS アーキテクチャの実装を問う**」オリジナル問題です。
 - 正解データ (`answerIndex`) は API レスポンスから除外され、クライアント側では
   答えが見えないようになっています。採点はサーバー側 (Lambda) で行います。
-- フロントエンドは静的な SPA（バニラ JS、ビルド不要）で、**Amplify Hosting** から配信します。
-- **管理者ページ (`/admin.html`)** から、自作のクイズを登録できます。管理者認証は
+- フロントエンドは **React + Vite + TypeScript の SPA**（`frontend/` 配下の独立した npm
+  プロジェクト）で、**Amplify Hosting** が npm ビルドして配信します。
+- **管理者ページ（`/admin.html`）** から、自作のクイズを登録できます。管理者認証は
   **Amazon Cognito（Hosted UI）** で行い、書き込み API は JWT オーソライザーで保護しています。
 - 初回の `GET /api/quizzes` 実行時、DynamoDB が空であればデフォルトの AWS 問題を自動投入します。
 
@@ -30,8 +31,8 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
    │
    │  ① 静的アセット (HTML/JS/CSS) を取得
    ▼
-[AWS Amplify Hosting]  ← Git リポジトリ連携 (Hosting のみ)。amplify.yml でビルド。
-   │                       ビルド時に環境変数から config.js を生成。
+[AWS Amplify Hosting]  ← Git リポジトリ連携 (Hosting のみ)。amplify.yml で npm ビルド。
+   │                       ビルド時に環境変数から frontend/.env を生成し VITE_* に注入。
    │
    │  ② API 呼び出し（クロスオリジン / CORS）
    ▼
@@ -50,7 +51,8 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
 ```
 
 - **フロントエンド配信**: AWS Amplify Hosting。Git リポジトリを接続し、`amplify.yml` に従って
-  ビルド（npm ビルドはなく、環境変数から `config.js` を生成するだけ）して配信します。
+  `frontend/` で npm ビルド（Vite）を実行し、生成物 `frontend/dist` を配信します。ビルド前処理で
+  Amplify の環境変数から `frontend/.env` を生成し、Vite が読む `VITE_*` に注入します。
   Amplify は **Hosting のみ**利用し、Amplify バックエンド（Gen2 等）は使いません。
 - **クロスオリジン API 呼び出し（CORS）**: SPA は Amplify のドメインから配信され、API とは
   別オリジンになります。そのため HTTP API 側で CORS を有効化しています。
@@ -71,8 +73,8 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
 > (2) CloudFront で SPA ルーティング用に設定していた「403/404 → `index.html`(200)」の書き換えは
 > ディストリビューション全体に適用され、API の正当な 4xx (JSON) まで HTML(200) に置き換えてしまう
 > 問題がありました。CloudFront をやめることでこの落とし穴も解消しています。
-> なお、フロントの `fetchJson` にある content-type チェックは、クロスオリジンでの設定ミス等に備えた
-> 防御的コードとして残しています。
+> なお、フロントの API クライアント（`frontend/src/api.ts`）にある content-type チェックは、
+> クロスオリジンでの設定ミス等に備えた防御的コードとして残しています。
 
 ---
 
@@ -87,13 +89,14 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
 ## 管理者ページと自作クイズの登録フロー
 
 1. Amplify のドメインで `/admin.html` を開きます（例: `https://main.<appId>.amplifyapp.com/admin.html`）。
+   これは Vite のマルチページビルドで生成される実体のある静的ファイルです（SPA 書き換えルールは不要）。
 2. 「ログイン」ボタンを押すと Cognito Hosted UI にリダイレクトされ、管理者メールアドレスと
    パスワードでログインします（ユーザーは事前に運用者が作成、後述）。
 3. ログイン後、タイトルと問題（各問 2〜4 個の選択肢、正解を 1 つ指定）を入力して送信します。
 4. 送信は `POST /api/admin/quizzes` に `Authorization: Bearer <id_token>` 付きで行われ、
    JWT オーソライザーの検証を通過すると DynamoDB に保存されます。未認証・権限不足の場合は
    401/403 で拒否されます。
-5. 登録後、トップページ (`index.html`) の一覧に自作クイズが表示されます。
+5. 登録後、トップページ（`/` または `/index.html`）の一覧に自作クイズが表示されます。
 
 ---
 
@@ -131,12 +134,16 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
 3. **Amplify Hosting に Git リポジトリを接続する（Hosting のみ）。**
    Amplify コンソールで「アプリケーションをホスト」を選び、リポジトリとブランチを
    接続します（**Amplify バックエンドは作成しません**）。次の環境変数を設定します
-   （値は手順 1 の CfnOutput から）。
-   - `API_BASE` = `ApiEndpoint` + `/api`
+   （値は手順 1 の CfnOutput から）。環境変数名は従来どおりで、`amplify.yml` が
+   ビルド時にこれらを Vite の `VITE_*` にマッピングします。
+   - `API_BASE` = `ApiEndpoint` + `/api` → ビルドで `VITE_API_BASE` に注入
      （例: `https://xxxx.execute-api.<region>.amazonaws.com/api`）
-   - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain`
-   - `COGNITO_CLIENT_ID` = `UserPoolClientId`
+   - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain` → `VITE_COGNITO_DOMAIN`
+   - `COGNITO_CLIENT_ID` = `UserPoolClientId` → `VITE_COGNITO_CLIENT_ID`
    これらの環境変数名は `amplify.yml` が参照する名前と一致している必要があります。
+   フロントエンドは Vite のマルチページビルドで、公開アプリ（`/index.html`）と管理者
+   ページ（`/admin.html`）の 2 つを**実体のある静的ファイル**として出力します。どちらも
+   実ファイルなので、**SPA 用の書き換えルール（全パスを `/index.html` にリライト）は不要**です。
    デプロイ後、Amplify が払い出したドメイン（例: `https://main.<appId>.amplifyapp.com`）を控えます。
 
 4. **Amplify ドメインが判明したら CDK スタックを再デプロイする。**
@@ -151,6 +158,10 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
    ```
    これで `https://main.<appId>.amplifyapp.com/admin.html` が Hosted UI の
    `redirect_uri` / `logout_uri` として許可されます。
+   > **補足**: React フロントエンドは Vite の**マルチページ**構成で、管理者ページは
+   > 実体のある静的ファイル `/admin.html` として配信されます。そのため管理者ページ自身の
+   > URL（origin + `/admin.html`）は、CDK が Cognito に登録済みのコールバック/ログアウト
+   > URL と**完全一致**します。**CDK の変更も Amplify の SPA 書き換えルールも不要**です。
 
 5. **（任意・推奨）CORS の許可オリジンを絞る。**
    `lib/quiz-app-stack.ts` の `corsPreflight.allowOrigins` を実際の Amplify ドメイン
@@ -235,18 +246,24 @@ aws cognito-idp admin-set-user-password \
 
 1. Amplify コンソールで **「アプリケーションをホスト」**を選び、この Git リポジトリと
    ブランチを接続します（**Amplify バックエンドは作成しません**。Hosting のみ）。
-2. ビルド設定はリポジトリの **`amplify.yml`** が使われます（npm ビルドなし。環境変数から
-   `frontend/config.js` を生成して `frontend/` を配信）。
-3. **環境変数**を設定します（値は上記 CfnOutput から）。
-   - `API_BASE` = `ApiEndpoint` + `/api`
+2. ビルド設定はリポジトリの **`amplify.yml`** が使われます（`frontend/` で `npm ci`（無ければ
+   `npm install`）→ `npm run build`（Vite）を実行。ビルド前に環境変数から `frontend/.env` を
+   生成し `VITE_*` に注入。配信ディレクトリは `frontend/dist`）。
+3. **環境変数**を設定します（値は上記 CfnOutput から）。名前は従来どおりで、`amplify.yml` が
+   ビルド時に Vite の `VITE_*` へマッピングします。
+   - `API_BASE` = `ApiEndpoint` + `/api` → `VITE_API_BASE`
      （例: `https://xxxx.execute-api.<region>.amazonaws.com/api`）
-   - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain`
+   - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain` → `VITE_COGNITO_DOMAIN`
      （例: `https://<prefix>.auth.<region>.amazoncognito.com`）
-   - `COGNITO_CLIENT_ID` = `UserPoolClientId`
-4. デプロイ後、Amplify が払い出したドメイン（例: `https://main.<appId>.amplifyapp.com`）を控えます。
+   - `COGNITO_CLIENT_ID` = `UserPoolClientId` → `VITE_COGNITO_CLIENT_ID`
+4. **SPA 書き換えルールは不要**です。フロントエンドは Vite の**マルチページ**ビルドで、
+   公開アプリ（`/index.html`）と管理者ページ（`/admin.html`）の 2 つを実体のある静的
+   ファイルとして出力します。どちらも実ファイルなので、Amplify コンソールで「全パスを
+   `/index.html` にリライト」する SPA 用ルールを追加する必要はありません。
+5. デプロイ後、Amplify が払い出したドメイン（例: `https://main.<appId>.amplifyapp.com`）を控えます。
 
-> リポジトリにコミットされている `frontend/config.js` はローカル開発用の**プレースホルダー**です。
-> Amplify のビルドが環境変数の値でこのファイルを上書きします。
+> `frontend/.env` は Amplify のビルドが環境変数から生成します（リポジトリには
+> `frontend/.env.example` のみをコミットし、実値は Amplify コンソールで管理します）。
 
 ### 4. Cognito のコールバック/ログアウト URL を実ドメインに更新
 
@@ -282,6 +299,46 @@ npx cdk deploy \
 
 ---
 
+## フロントエンドのローカル開発 (React + Vite)
+
+フロントエンドは `frontend/` 配下の独立した npm プロジェクトです（ルートの CDK
+プロジェクトとは別。それぞれ自分の `package.json` と `node_modules` を持ちます）。
+
+```bash
+cd frontend
+
+# 依存関係のインストール（package-lock.json は初回の install で生成されます）
+npm install
+
+# 環境変数のひな形をコピーして実値を設定
+cp .env.example .env.local
+# .env.local を編集し、VITE_API_BASE / VITE_COGNITO_DOMAIN / VITE_COGNITO_CLIENT_ID を設定
+
+# 開発サーバー（既定 http://localhost:5173）
+npm run dev
+
+# 本番ビルド（tsc の型チェック + Vite バンドル。出力は frontend/dist）
+npm run build
+```
+
+- `VITE_API_BASE` が空の場合は同一オリジンの `/api` が既定になります。
+- フロントエンドは Vite の**マルチページ**構成です。公開アプリは `/`（`index.html`）、
+  管理者ページは `/admin.html` という実体のある静的ファイルとして配信されます
+  （クライアントサイドルーターは使いません。ページ間の遷移は通常の `<a>` リンク）。
+- 管理者ページの Cognito `redirect_uri` / `logout_uri` はこのページ自身の URL
+  （origin + pathname、すなわち `.../admin.html`）を使います。この URL は CDK が Cognito に
+  登録済みのコールバック/ログアウト URL と一致するため、SPA 書き換えルールも CDK 変更も
+  不要です。ローカルで Hosted UI を試す場合は、CDK 側で dev 用のコールバック URL
+  （`http://localhost:8080/admin.html`）を許可してください（デプロイ手順の
+  `includeLocalhostCallback` を参照）。なお Vite 開発サーバーの既定ポートは 5173 のため、
+  localhost で Hosted UI を試す場合はポートの整合にも注意してください。
+
+> 注: 一部のサンドボックス環境では壊れた `NODE_OPTIONS` を回避するため、
+> `npm` コマンドの前に `env -u NODE_OPTIONS` を付ける必要があります
+> （例: `env -u NODE_OPTIONS npm install`）。通常の環境では不要です。
+
+---
+
 ## 破棄 (Teardown)
 
 不要になったら、以下で CDK スタックのリソース（Lambda / API / DynamoDB / Cognito）を削除できます。
@@ -302,10 +359,16 @@ DynamoDB テーブルと Cognito User Pool は `RemovalPolicy.DESTROY` を設定
 **フル検証のためのコマンド**です。接続環境で実行してください。
 
 ```bash
+# バックエンド（ルートの CDK プロジェクト）
 env -u NODE_OPTIONS npm ci
 env -u NODE_OPTIONS npm run build
 env -u NODE_OPTIONS npm test
 env -u NODE_OPTIONS npx cdk synth
+
+# フロントエンド（React + Vite の SPA）
+cd frontend
+env -u NODE_OPTIONS npm install
+env -u NODE_OPTIONS npm run build   # tsc 型チェック + Vite バンドル。frontend/dist を生成
 ```
 
 > 注: 一部のサンドボックス環境では壊れた `NODE_OPTIONS` を回避するため、
@@ -325,7 +388,7 @@ env -u NODE_OPTIONS npx cdk synth
 | **AWS Lambda (ARM64 / Graviton)** | 呼び出し回数と実行時間のみの課金で、**リクエストが無ければ料金は発生せずゼロにスケール**。ARM64 は x86 より単価が安い。メモリ 256 MB / タイムアウト 10 秒に抑制。 |
 | **API Gateway HTTP API (v2)** | 同等の REST API より**リクエスト単価が安い**。 |
 | **Amazon Cognito User Pool** | ユーザー数に応じた無料枠があり、**アイドル時の固定料金は発生しない**。JWT オーソライザーもリクエスト時のみ動作。 |
-| **AWS Amplify Hosting** | フロント配信は Amplify に集約。課金は主に**ビルド時間と配信（ストレージ/転送）**のみ。npm ビルドを行わない最小構成でビルド時間を抑制。以前の **S3 + CloudFront によるフロント配信は廃止**（冗長かつ 403/404 書き換えの問題があったため）。 |
+| **AWS Amplify Hosting** | フロント配信は Amplify に集約。課金は主に**ビルド時間と配信（ストレージ/転送）**のみ。Vite の npm ビルドは高速で、依存関係を最小限に抑えてビルド時間を短縮。以前の **S3 + CloudFront によるフロント配信は廃止**（冗長かつ 403/404 書き換えの問題があったため）。 |
 | **VPC / NAT ゲートウェイ なし** | NAT ゲートウェイは**アイドルでも時間課金**が発生するため使用しない。 |
 | **EC2 / RDS などの常時起動リソース なし** | 24 時間課金される計算・DB リソースを一切使わない。 |
 

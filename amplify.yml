@@ -1,8 +1,16 @@
 # AWS Amplify Hosting ビルド仕様（Hosting のみ / バックエンドは使わない）
 #
-# このフロントエンドは依存関係ゼロのバニラ JS SPA なので npm ビルドは不要です。
-# ビルドフェーズでは、Amplify コンソールに設定した環境変数から frontend/config.js を
-# 生成し、実際の API/Cognito 値を注入します。
+# フロントエンドは React + Vite + TypeScript の SPA（frontend/ 配下の独立した
+# npm プロジェクト）です。Amplify は frontend/ で npm ビルドを実行し、生成物
+# （frontend/dist）を配信します。
+#
+# 環境変数の注入: Amplify コンソールに設定した環境変数を、ビルド前処理で
+# frontend/.env に書き出し、Vite が参照する VITE_* にマッピングします。
+#   API_BASE          -> VITE_API_BASE
+#   COGNITO_DOMAIN    -> VITE_COGNITO_DOMAIN
+#   COGNITO_CLIENT_ID -> VITE_COGNITO_CLIENT_ID
+# Amplify コンソールの環境変数名は従来どおり（API_BASE / COGNITO_DOMAIN /
+# COGNITO_CLIENT_ID）なので、コンソール側の再設定は不要です。
 #
 # 必要な環境変数（Amplify コンソール > アプリケーションの設定 > 環境変数）:
 #   - API_BASE          = CDK CfnOutput の ApiEndpoint + '/api'
@@ -11,35 +19,42 @@
 #                         例: https://<prefix>.auth.<region>.amazoncognito.com
 #   - COGNITO_CLIENT_ID = CDK CfnOutput の UserPoolClientId
 #
-# 注意: リポジトリにコミットされている frontend/config.js はローカル開発用の
-# プレースホルダーです。Amplify のビルドはこのファイルを上書きし、上記の
-# 環境変数の値で config.js を再生成します（artifacts に含まれるのは生成後の内容）。
+# ルーティング: マルチページ構成のため、公開アプリは /index.html、管理者ページは
+# /admin.html という実体のある静的ファイルとして配信されます。両方とも実ファイル
+# なので、SPA 用の書き換えルール（全パスを /index.html に 200 リライト）は不要です。
+# 管理者ページの URL（origin + '/admin.html'）は、CDK が Cognito に登録済みの
+# コールバック/ログアウト URL と完全一致します。
 version: 1
 frontend:
   phases:
     preBuild:
       commands:
-        # ビルド前処理は不要（静的 SPA、npm ビルドなし）。
-        - echo "No preBuild step - static SPA, no npm build."
+        # Amplify の環境変数から frontend/.env を生成し、Vite が読む VITE_* に
+        # マッピングする。その後、依存関係をインストールする。
+        - cd frontend
+        - |
+          cat > .env <<EOF
+          VITE_API_BASE=${API_BASE}
+          VITE_COGNITO_DOMAIN=${COGNITO_DOMAIN}
+          VITE_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
+          EOF
+        - echo "Generated frontend/.env:"
+        - cat .env
+        - npm ci || npm install
     build:
       commands:
-        # 環境変数から frontend/config.js を生成し、コミット済みの
-        # プレースホルダーを上書きする。
-        - echo "Generating frontend/config.js from Amplify environment variables..."
-        - |
-          cat > frontend/config.js <<EOF
-          // このファイルは Amplify のビルド時に amplify.yml が自動生成しています。
-          // 手動編集しないでください（ローカル開発用のプレースホルダーは Git 管理下にあります）。
-          window.API_BASE = "${API_BASE}";
-          window.COGNITO_DOMAIN = "${COGNITO_DOMAIN}";
-          window.COGNITO_CLIENT_ID = "${COGNITO_CLIENT_ID}";
-          EOF
-        - echo "Generated frontend/config.js:"
-        - cat frontend/config.js
+        - cd frontend
+        - npm run build
   artifacts:
-    # frontend/ ディレクトリ配下の全ファイルを配信対象にする。
-    baseDirectory: frontend
+    # Vite のビルド出力（frontend/dist）を配信対象にする。
+    baseDirectory: frontend/dist
     files:
       - '**/*'
   cache:
-    paths: []
+    # 依存関係をキャッシュしてビルドを高速化する。再現性は、npm install が生成し
+    # コミットする package-lock.json（frontend/package-lock.json）に依存する点に注意。
+    # lockfile が無いままだと、キャッシュ済み node_modules と npm install の結果が
+    # ビルド間でずれる可能性がある。lockfile をコミットすれば npm ci が使われ、
+    # 依存関係が固定される。
+    paths:
+      - frontend/node_modules/**/*
