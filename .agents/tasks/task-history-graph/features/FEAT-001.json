@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create a pure, typed, localStorage-backed history module at frontend/src/history.ts. This is the data layer for the client-side quiz history feature: it persists each scored attempt in the browser (no backend, no login) under a single versioned storage key, and exposes pure functions for loading, appending, clearing, and aggregating history. All localStorage access is guarded so private-mode / disabled storage degrades to empty history without crashing. Records are capped to a maximum so storage cannot grow unbounded. This feature is a prerequisite for FEAT-002 (the history view consumes these functions). No UI changes here.",
+  "status": "completed",
+  "steps": [
+    "Create frontend/src/history.ts. Define and export an interface HistoryRecord with fields: quizId: string; title: string; score: number; total: number; percent: number; takenAt: string (ISO timestamp). percent is round(score/total*100), or 0 when total is 0.",
+    "Define a versioned storage envelope type, e.g. interface HistoryStore { version: number; records: HistoryRecord[] }. Export a constant STORAGE_KEY = 'quizHistory', a CURRENT_VERSION = 1, and a MAX_RECORDS = 200 cap.",
+    "Export function load(): HistoryRecord[] that reads STORAGE_KEY from localStorage inside try/catch. If missing, malformed JSON, wrong shape, or an unexpected version, return []. Validate the parsed value is an object with a records array and filter to well-formed records (guard each field's type) so corrupt entries never propagate. Never throw.",
+    "Export function append(record: HistoryRecord): HistoryRecord[] that loads current records, appends the new record, trims to the most recent MAX_RECORDS (keep the last MAX_RECORDS, dropping oldest), writes the envelope back to localStorage inside try/catch, and returns the updated (trimmed) records array. If writing fails (quota/disabled), swallow the error and still return the in-memory trimmed array so callers/UI can proceed.",
+    "Export a convenience factory function makeRecord(input: { quizId: string; title: string; score: number; total: number; takenAt?: string }): HistoryRecord that computes percent = total > 0 ? Math.round((score/total)*100) : 0 and defaults takenAt to new Date().toISOString(). This keeps percent rounding identical to HomePage's existing formula.",
+    "Export function clear(): void that removes STORAGE_KEY from localStorage inside try/catch (never throw).",
+    "Export aggregation helper function averageByQuiz(records: HistoryRecord[]): Array<{ quizId: string; title: string; averagePercent: number; attempts: number }>. Group by quizId, compute the mean of percent rounded to an integer, count attempts, and use the most recent record's title for display. Return a stable, sensibly ordered array (e.g. by title or by most-recent attempt) suitable for a bar chart.",
+    "Export aggregation helper function chronological(records: HistoryRecord[]): HistoryRecord[] that returns records sorted ascending by takenAt (a defensive copy; do not mutate input) suitable for a time-series line chart.",
+    "Keep the module free of React imports and side-effect-free at import time (pure functions only). It must satisfy tsconfig strict mode (no unused locals/params, explicit types)."
+  ],
+  "acceptance_criteria": [
+    "frontend/src/history.ts exists and exports: HistoryRecord (type/interface), STORAGE_KEY, MAX_RECORDS, load, append, makeRecord, clear, averageByQuiz, chronological.",
+    "load() returns [] (never throws) when localStorage is unavailable, the key is absent, the JSON is malformed, the shape is wrong, or the version does not match.",
+    "append() enforces the MAX_RECORDS cap by keeping the most recent records and returns the updated array even if the write to localStorage throws.",
+    "makeRecord computes percent as total > 0 ? Math.round((score/total)*100) : 0, matching HomePage's existing percent formula, and defaults takenAt to an ISO timestamp.",
+    "averageByQuiz groups by quizId with an integer averagePercent and attempts count; chronological returns a sorted copy without mutating its input.",
+    "The module imports no React and has no top-level side effects; it is written to compile under the frontend's strict tsconfig."
+  ],
+  "verification": [
+    "Read frontend/src/history.ts and confirm every localStorage access (getItem/setItem/removeItem) is wrapped in try/catch and no function throws on the failure paths.",
+    "Confirm the exported function signatures and the percent formula match this feature's steps and HomePage's existing rounding.",
+    "On a networked host the module is type-checked as part of `cd frontend && npm run build` (tsc -b); confirm it has no unused-locals/params or type errors by inspection."
+  ],
+  "blocked_reason": null,
+  "findings": "Created frontend/src/history.ts with all required exports (HistoryRecord, STORAGE_KEY, CURRENT_VERSION, MAX_RECORDS, load, append, makeRecord, clear, averageByQuiz, chronological). All localStorage access (getItem/setItem/removeItem) is wrapped in try/catch; load() returns [] on missing key, malformed JSON, wrong shape, version mismatch, and filters corrupt records via an isHistoryRecord type guard. append() caps to the most recent MAX_RECORDS (slice(-MAX_RECORDS)) and returns the trimmed array even when the write throws. makeRecord percent = total > 0 ? Math.round((score/total)*100) : 0, matching HomePage. averageByQuiz groups by quizId with integer averagePercent + attempts, uses the most-recent title, sorts by title. chronological returns a defensive sorted copy. No React imports, no top-level side effects. Not build-verified in sandbox (INTEGRATIONS_ONLY: npm/tsc/vite blocked by 403); authored correct-by-construction against the strict tsconfig (target ES2020 supports ??). User runs `cd frontend && npm install && npm run build` on a networked host."
+}

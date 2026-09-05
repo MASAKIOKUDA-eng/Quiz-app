@@ -1,0 +1,7 @@
+{
+  "task_id": "task-history-graph",
+  "task_description": "Add a client-side quiz history + graph feature to the public React app (案A): persist each scored attempt in the browser's localStorage (no backend, no login, no cost) via a pure typed history module, and add a history view that renders two dependency-free inline-SVG charts (score-over-time line chart and per-quiz average-accuracy bar chart) plus a recent-attempts list and a clear-history action. Integrate into HomePage's no-router view state machine with in-page navigation, recording history exactly once per completed attempt. Keep dependencies exactly react + react-dom; do not touch the backend, API, amplify.yml, Cognito/auth, or admin page core behavior.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}
