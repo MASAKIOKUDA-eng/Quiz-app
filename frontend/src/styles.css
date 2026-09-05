@@ -720,6 +720,121 @@ a:hover {
   margin-top: 0;
 }
 
+/* --- 履歴画面 --- */
+.history-view {
+  animation: card-in var(--dur) var(--ease) both;
+}
+
+.history-chart-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 0.75rem;
+}
+
+/* 自前 SVG チャート。viewBox を保ちつつカード幅にフィットする。 */
+.svg-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* チャートの軸・グリッド・要素は配色をハードコードせず既存トークンに委ねる。 */
+.chart-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chart-grid {
+  stroke: var(--card-border);
+  stroke-width: 1;
+}
+
+.chart-axis-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-axis-sub {
+  fill: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-value-label {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-line {
+  stroke: var(--primary);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-point {
+  fill: var(--primary);
+  stroke: var(--card);
+  stroke-width: 1.5;
+}
+
+.chart-bar {
+  fill: var(--primary);
+}
+
+/* --- 履歴: 直近の受験一覧 --- */
+.history-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.history-recent-item {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.history-recent-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.history-recent-percent {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-recent-score {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-recent-date {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- キーフレーム --- */
 @keyframes card-in {
   from {

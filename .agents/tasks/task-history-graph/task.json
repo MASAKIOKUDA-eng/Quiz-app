@@ -1,0 +1,14 @@
+{
+  "task_id": "task-history-graph",
+  "task_description": "Add a client-side quiz history + graph feature to the public React app (案A): persist each scored attempt in the browser's localStorage (no backend, no login, no cost) via a pure typed history module, and add a history view that renders two dependency-free inline-SVG charts (score-over-time line chart and per-quiz average-accuracy bar chart) plus a recent-attempts list and a clear-history action. Integrate into HomePage's no-router view state machine with in-page navigation, recording history exactly once per completed attempt. Keep dependencies exactly react + react-dom; do not touch the backend, API, amplify.yml, Cognito/auth, or admin page core behavior.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "skipped",
+    "tests": "skipped",
+    "test_quality": "skipped",
+    "docker_build": "skipped",
+    "summary": "INTEGRATIONS_ONLY sandbox: npm install / tsc / vite build cannot run (npm registry 403), and the frontend has no test runner (none may be added). Verified correct-by-construction by reading: (1) frontend dependencies remain exactly react + react-dom, no lockfile added; (2) backend (lambda/, lib/, test/), api.ts contract, amplify.yml, Cognito/auth, admin page untouched; (3) history.ts is pure, guards all localStorage access in try/catch, caps at MAX_RECORDS=200, percent formula matches HomePage; (4) HomePage records history exactly once in the async submit callback (not render/useEffect), View extended to include 'history', navigation added on list + result screens, all existing scoring/score-ring/aria/Japanese copy preserved; (5) charts are dependency-free inline SVG with viewBox responsiveness, CSS-variable/currentColor theming (no hardcoded hex), role/aria-label/<title> and non-color-only labels; (6) all referenced CSS classes defined in styles.css using existing design tokens; (7) type alignment verified between averageByQuiz return shape and BarChart QuizAverage prop, and api.ts types (QuizDetail.title, SubmitResult.score/total). User must run `cd frontend && npm install && npm run build` on a networked host to confirm the tsc + vite build."
+  }
+}
