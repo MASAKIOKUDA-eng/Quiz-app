@@ -1,0 +1,27 @@
+{
+  "id": "FEAT-002",
+  "type": "chore",
+  "description": "Add the CSS needed for the one-by-one mode and mode chooser to frontend/src/styles.css using the existing design tokens, and add a short README note describing the two answering modes. Depends on FEAT-001 (styles must match the class names introduced there). This is styling + docs polish, not new logic.",
+  "status": "completed",
+  "steps": [
+    "In frontend/src/styles.css, add any new classes introduced by FEAT-001 (e.g. a mode chooser container/buttons, a 「Q X / Y」 indicator, and one-by-one navigation actions). Reuse existing design tokens (CSS vars like --card, --primary, --muted, --radius, --shadow, spacing rhythm) and existing primitives (.card, .btn, .btn.primary, .btn.small, .option, .question, .progress, .quiz-actions). Prefer reusing existing classes over inventing new ones; only add new classes where the layout genuinely differs (e.g. a step indicator or a mode-choice layout).",
+    "Ensure new styles work in both light and dark mode by using the CSS variables (do NOT hardcode hex colors) so the prefers-color-scheme dark block already applies. Do not add any animation that ignores the existing global prefers-reduced-motion reduce block; if adding transitions/animations, keep them consistent with existing var(--ease)/var(--dur) usage so the reduce block neutralizes them.",
+    "Keep responsive behavior consistent: verify new controls wrap/stack acceptably at the existing max-width:480px breakpoint (mirror the .quiz-actions .btn { flex: 1 1 auto } pattern if new action rows are added).",
+    "In README.md, add a short note (Japanese, matching the existing tone) describing that the public quiz app now offers two answering modes chosen when starting a quiz: 一括表示 (all questions on one page, the existing behavior) and 一問一答 (one question at a time). Make clear both modes use the SAME server-side scoring, the SAME result screen, and the SAME localStorage history recording, and that no new dependencies were added. A natural place is near the existing quiz-flow / history sections.",
+    "Do NOT touch backend docs sections, deployment steps, api.ts, amplify.yml, or admin content beyond this note."
+  ],
+  "acceptance_criteria": [
+    "All class names referenced by the one-by-one component and mode chooser in FEAT-001 are defined in styles.css (or reuse existing classes), using CSS variables (no hardcoded hex) so dark mode applies automatically.",
+    "New/updated styles are consistent with the existing token system and do not override or bypass the global prefers-reduced-motion reduce block.",
+    "README.md contains a concise Japanese note describing the two answering modes and stating both share the same scoring/result/history path with no new dependencies.",
+    "No changes to backend, api.ts, amplify.yml, or admin; dependencies remain exactly react + react-dom."
+  ],
+  "verification": [
+    "Cross-check every className used in the one-by-one component / mode chooser against styles.css; confirm each is defined or is an existing reused class.",
+    "Grep styles.css additions for hardcoded hex colors in new rules; confirm colors come from CSS variables.",
+    "Read the README note; confirm it accurately describes the two modes and the shared scoring/result/history path and no-new-deps claim.",
+    "User confirms visual result via `cd frontend && npm run dev` / `npm run build` on a networked host (cannot run in INTEGRATIONS_ONLY sandbox)."
+  ],
+  "blocked_reason": null,
+  "findings": "Added CSS to frontend/src/styles.css for the mode chooser (.mode-chooser, .mode-chooser-label, .mode-options, .mode-option, .mode-option-title, .mode-option-desc) and the one-by-one section (.one-by-one). The .mode-option cards use the existing .card primitive plus hover/focus-visible rules mirroring .quiz-card (transform lift, --shadow-hover, --primary border, --ring focus). QuizTakingOneByOne reuses existing classes (.quiz-heading .progress .progress-bar .progress-bar-fill .progress-label .card .question .option .quiz-actions .btn .btn.primary); its nav action row uses .quiz-actions which already gets flex:1 1 auto on .btn at the max-width:480px breakpoint, and .mode-options is column-stacked so it is already responsive (no new breakpoint rules needed). All new rules use only existing CSS variables/tokens (no hardcoded hex), so the prefers-color-scheme dark block applies automatically, and transitions/animations use var(--ease)/var(--dur) plus the shared card-in keyframe so the global prefers-reduced-motion reduce block neutralizes them. README.md gained a new '回答方式（一括表示 / 一問一答）' section before the history section stating both modes share the same server-side scoring, same result screen, same localStorage history recording, and add no new dependencies. Verification: INTEGRATIONS_ONLY sandbox cannot run npm install / tsc / vite build (registry 403) and no frontend test runner exists; verified correct-by-construction by cross-checking every className used in HomePage.tsx against styles.css and confirming no hardcoded hex in new rules. Deps remain exactly react + react-dom; no lockfile added; api.ts/history.ts/amplify.yml/backend/admin untouched. User must run `cd frontend && npm install && npm run build` (and `npm run dev`) on a networked host."
+}
