@@ -1,0 +1,26 @@
+{
+  "project_type": "AWS CDK (TypeScript) infrastructure-as-code project for a fully serverless quiz application, plus Lambda handler source and a minimal static SPA frontend",
+  "language": "TypeScript (CDK app + Lambda handlers); HTML/CSS/vanilla JS for the frontend",
+  "build_system": "npm with local devDependencies. AWS CDK is a LOCAL devDependency invoked via `npx cdk`, NOT installed globally. TypeScript compiled via `tsc` (local). Note: the sandbox has a broken NODE_OPTIONS env var (points to a missing /opt/amazon/kiro-agent/proxy-bootstrap.js) - any node/npm/npx command MUST be run with NODE_OPTIONS unset (e.g. `env -u NODE_OPTIONS npm ...`).",
+  "test_framework": "Jest with ts-jest, using @aws-cdk/assertions (aws-cdk-lib/assertions Template) for fine-grained assertion tests on the synthesized CloudFormation template, plus unit tests for the Lambda handler logic.",
+  "build_command": "env -u NODE_OPTIONS npm run build  (runs tsc). Requires `npm install` first, which needs network (see environment_constraints).",
+  "test_command": "env -u NODE_OPTIONS npm test  (runs jest). Requires dependencies installed.",
+  "verification_instructions": "Because the sandbox has NO network access (INTEGRATIONS_ONLY) and the npm registry returns 403, `npm install`, `npx cdk synth`, `tsc`, `jest`, and any deploy CANNOT run here. Verification in-sandbox is limited to: (1) structural validation - all expected files exist; (2) JSON validity of package.json/tsconfig.json/cdk.json; (3) manual TypeScript source review for correctness and internal consistency (imports resolve to declared deps, construct wiring is coherent). Full verification (`npm ci && npm run build && npm test && npx cdk synth`) is a documented post-clone step to run in a networked environment.",
+  "snapshot_or_generated_files": "cdk.out/ (synthesized templates) and *.js/*.d.ts from tsc are build artifacts and MUST be gitignored, not committed. No committed snapshots.",
+  "setup_instructions": "In a networked environment: 1) `cd Quiz-app` 2) `npm install` 3) `npm run build` 4) `npm test` 5) bootstrap once per account/region: `npx cdk bootstrap` 6) `npx cdk deploy`. In THIS sandbox, network is blocked so only source creation is possible; always prefix node tooling with `env -u NODE_OPTIONS`.",
+  "environment_constraints": "INTEGRATIONS_ONLY network mode: npm registry returns HTTP 403, so npm install / cdk synth / cdk deploy / aws deploy calls all FAIL in-sandbox. Node.js v22.23.2 and npm 11.4.2 are present but require `env -u NODE_OPTIONS` prefix due to a broken NODE_OPTIONS pointing at a missing proxy-bootstrap.js. AWS CLI 2.33.15 present but cannot reach AWS. Deployment and dependency-install steps must be documented as post-clone follow-ups, NOT executed.",
+  "contribution_requirements": "No CONTRIBUTING.md exists (greenfield, only LICENSE present - Apache 2.0). Follow standard CDK project conventions. Do not push or open PRs (orchestrator handles publishing).",
+  "key_patterns": "Standard `cdk init app --language typescript` layout: bin/ entrypoint instantiates the stack; lib/ holds the Stack construct(s); test/ holds jest assertion tests; cdk.json sets the app command and feature flags. Cost-minimization patterns: DynamoDB PAY_PER_REQUEST (on-demand, no idle cost), Lambda on ARM64/Graviton with Node 22 runtime, API Gateway HTTP API (not REST), S3+CloudFront with Origin Access Control for the static site, no NAT gateways, no always-on compute. No Cognito (public quiz) to keep cost/complexity minimal - note as optional follow-up.",
+  "relevant_files": [
+    "Quiz-app/package.json (to create - CDK app manifest with aws-cdk-lib, constructs, aws-cdk, typescript, jest, ts-jest, esbuild, @types/* devDeps)",
+    "Quiz-app/cdk.json (to create - app entry `npx ts-node --prefer-ts-exts bin/quiz-app.ts` and CDK feature flags)",
+    "Quiz-app/tsconfig.json (to create)",
+    "Quiz-app/bin/quiz-app.ts (to create - app entrypoint)",
+    "Quiz-app/lib/quiz-app-stack.ts (to create - the serverless stack: DynamoDB, Lambda, HTTP API, S3, CloudFront)",
+    "Quiz-app/lambda/ (to create - Lambda handler source in TypeScript, bundled via NodejsFunction/esbuild)",
+    "Quiz-app/frontend/ (to create - minimal static SPA: index.html + app.js + styles)",
+    "Quiz-app/test/quiz-app-stack.test.ts (to create - assertion tests)",
+    "Quiz-app/README.md (to create - architecture, cost rationale, deploy instructions in Japanese)"
+  ],
+  "directory_structure": "Quiz-app/ root will contain: bin/ (CDK app entrypoint), lib/ (stack definition), lambda/ (Lambda handler TS source), frontend/ (static site assets), test/ (jest tests), plus package.json, tsconfig.json, cdk.json, jest.config.js, .gitignore, README.md. Existing: LICENSE, .git/."
+}
