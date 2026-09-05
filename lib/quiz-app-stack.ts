@@ -59,6 +59,18 @@ export class QuizAppStack extends cdk.Stack {
     //     @aws-sdk/* is provided by the Node runtime, so mark it
     //     external so esbuild does not bundle it.
     // ---------------------------------------------------------------
+    // Single allowed browser origin, used BOTH for the API Gateway CORS
+    // preflight AND (via the Lambda's ALLOWED_ORIGIN env var) for the
+    // `access-control-allow-origin` header on every Lambda JSON response, so
+    // the two stay coherent. It is a synth-time CDK context value (not a
+    // CfnParameter) so the literal string can be placed directly in the
+    // `allowOrigins` array and the Lambda environment. Override per-deploy
+    // with `-c allowedOrigin=https://my.domain`. Defaults to the Amplify
+    // Hosting domain for this app.
+    const allowedOrigin =
+      (this.node.tryGetContext('allowedOrigin') as string | undefined) ??
+      'https://main.d2uwsqpk41y7so.amplifyapp.com';
+
     const apiFunction = new NodejsFunction(this, 'ApiFunction', {
       runtime: lambda.Runtime.NODEJS_22_X,
       architecture: lambda.Architecture.ARM_64,
@@ -68,6 +80,9 @@ export class QuizAppStack extends cdk.Stack {
       handler: 'handler',
       environment: {
         TABLE_NAME: table.tableName,
+        // Kept in sync with the CORS allowOrigins below so the Lambda's
+        // access-control-allow-origin response header matches the preflight.
+        ALLOWED_ORIGIN: allowedOrigin,
       },
       bundling: {
         minify: true,
@@ -90,23 +105,26 @@ export class QuizAppStack extends cdk.Stack {
       // CORS: the SPA is served by Amplify Hosting (a different origin than
       // this API), so the browser makes CROSS-ORIGIN calls and issues CORS
       // preflights. We therefore allow:
-      //   - GET/POST/OPTIONS methods (OPTIONS for the preflight itself),
-      //   - both 'content-type' AND 'authorization' headers. The admin route
-      //     (POST /api/admin/quizzes) sends `Authorization: Bearer <jwt>`, so
-      //     'authorization' MUST be in allowHeaders or the preflight fails.
-      // `allowOrigins: ['*']` is kept as a conscious trade-off for this
-      // public, unauthenticated demo (the only authenticated route is the
-      // admin write route, which is additionally protected by the Cognito
-      // JWT authorizer regardless of CORS). SECURITY NOTE: tighten
-      // allowOrigins to the real Amplify domain (e.g.
-      // ['https://main.<appId>.amplifyapp.com']) once it is known - see
-      // README.md. CORS is a browser-side control and does not by itself
-      // authorize the API, but narrowing the origin is good hygiene.
+      //   - GET/POST/PUT/DELETE/OPTIONS methods (OPTIONS for the preflight
+      //     itself; PUT/DELETE for the admin edit/delete routes),
+      //   - both 'content-type' AND 'authorization' headers. The admin routes
+      //     send `Authorization: Bearer <jwt>`, so 'authorization' MUST be in
+      //     allowHeaders or the preflight fails.
+      // `allowOrigins` is tightened to a SINGLE origin (`allowedOrigin`,
+      // defaulting to the Amplify Hosting domain, overridable per-deploy via
+      // the `allowedOrigin` CDK context) instead of the previous '*'. The
+      // Lambda's access-control-allow-origin response header is set to the
+      // same value (ALLOWED_ORIGIN env var) so preflight and actual responses
+      // agree. CORS is a browser-side control and does not by itself
+      // authorize the API (the admin routes are additionally protected by the
+      // Cognito JWT authorizer), but narrowing the origin is good hygiene.
       corsPreflight: {
-        allowOrigins: ['*'],
+        allowOrigins: [allowedOrigin],
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.PUT,
+          apigwv2.CorsHttpMethod.DELETE,
           apigwv2.CorsHttpMethod.OPTIONS,
         ],
         allowHeaders: ['content-type', 'authorization'],
@@ -258,6 +276,28 @@ export class QuizAppStack extends cdk.Stack {
     httpApi.addRoutes({
       path: '/api/admin/quizzes',
       methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: adminJwtAuthorizer,
+    });
+
+    // Authenticated admin single-quiz routes: read (answerIndex-inclusive),
+    // full-replace edit, and delete. All bound to the SAME JWT authorizer as
+    // the create route above; the public routes stay OPEN.
+    httpApi.addRoutes({
+      path: '/api/admin/quizzes/{quizId}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration,
+      authorizer: adminJwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/api/admin/quizzes/{quizId}',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration,
+      authorizer: adminJwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/api/admin/quizzes/{quizId}',
+      methods: [apigwv2.HttpMethod.DELETE],
       integration,
       authorizer: adminJwtAuthorizer,
     });

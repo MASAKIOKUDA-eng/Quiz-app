@@ -102,16 +102,19 @@ function slugify(title: string): string {
 }
 
 /**
- * Pure validation + normalization for the admin quiz-creation payload.
- * Contains NO AWS SDK calls so it can be unit-tested in isolation.
- *
- * On success returns the normalized quiz with a guaranteed URL-safe
- * `quizId` (auto-generated from the title plus a short suffix when the
- * caller does not supply one). On failure returns a human-readable error.
+ * Shared, pure validation + normalization for the `{title, questions[]}`
+ * portion of an admin quiz payload. Used by BOTH the create route
+ * (validateAndNormalizeQuizInput) and the edit route
+ * (validateAndNormalizeQuizUpdate) so their per-question rules stay in
+ * sync. Contains NO AWS SDK calls and does NOT touch quizId (each entry
+ * point owns its own quizId policy). Returns the normalized title +
+ * questions on success, or a human-readable error on failure.
  */
-export function validateAndNormalizeQuizInput(
+function validateTitleAndQuestions(
   input: unknown,
-): ValidateQuizResult {
+):
+  | { ok: true; title: string; questions: NormalizedQuizQuestion[] }
+  | { ok: false; error: string } {
   if (typeof input !== 'object' || input === null) {
     return { ok: false, error: 'body must be a JSON object' };
   }
@@ -170,6 +173,27 @@ export function validateAndNormalizeQuizInput(
     questions.push({ text: q.text.trim(), options, answerIndex: q.answerIndex });
   }
 
+  return { ok: true, title, questions };
+}
+
+/**
+ * Pure validation + normalization for the admin quiz-creation payload.
+ * Contains NO AWS SDK calls so it can be unit-tested in isolation.
+ *
+ * On success returns the normalized quiz with a guaranteed URL-safe
+ * `quizId` (auto-generated from the title plus a short suffix when the
+ * caller does not supply one). On failure returns a human-readable error.
+ */
+export function validateAndNormalizeQuizInput(
+  input: unknown,
+): ValidateQuizResult {
+  const base = validateTitleAndQuestions(input);
+  if (!base.ok) {
+    return base;
+  }
+  const { title, questions } = base;
+  const obj = input as Record<string, unknown>;
+
   // quizId: use the caller's value if valid, otherwise auto-generate a
   // URL-safe slug from the title plus a short suffix for uniqueness.
   let quizId: string;
@@ -182,17 +206,42 @@ export function validateAndNormalizeQuizInput(
     }
     quizId = obj.quizId;
   } else {
-    const base = slugify(title);
+    const slug = slugify(title);
     const suffix = Date.now().toString(36).slice(-6);
-    quizId = base ? `${base}-${suffix}` : `quiz-${suffix}`;
+    quizId = slug ? `${slug}-${suffix}` : `quiz-${suffix}`;
   }
 
   return { ok: true, quiz: { quizId, title, questions } };
 }
 
+/**
+ * Pure validation + normalization for the admin quiz-EDIT payload
+ * (PUT /api/admin/quizzes/{quizId}). The edit is full-replace and the
+ * quizId comes from the request PATH, so the body's `{title, questions[]}`
+ * is validated with the SAME per-question rules as the create route while
+ * the `quizId` is set from the given `quizId` argument. Any `quizId` in the
+ * body is ignored (never overrides the path, never auto-generated).
+ * Contains NO AWS SDK calls so it can be unit-tested in isolation.
+ */
+export function validateAndNormalizeQuizUpdate(
+  input: unknown,
+  quizId: string,
+): ValidateQuizResult {
+  const base = validateTitleAndQuestions(input);
+  if (!base.ok) {
+    return base;
+  }
+  return {
+    ok: true,
+    quiz: { quizId, title: base.title, questions: base.questions },
+  };
+}
+
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? '*';
+
 const JSON_HEADERS = {
   'content-type': 'application/json',
-  'access-control-allow-origin': '*',
+  'access-control-allow-origin': ALLOWED_ORIGIN,
 };
 
 function json(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
@@ -376,6 +425,67 @@ async function writeQuizItems(quiz: NormalizedQuiz): Promise<void> {
   }
 }
 
+/**
+ * Delete every item (META + all Q#n) belonging to a single quiz.
+ *
+ * DynamoDB's DocumentClient has no "delete by key prefix", so we first
+ * learn the exact keys via getQuizItems (a Query on pk=QUIZ#<quizId>),
+ * then issue BatchWrite DeleteRequests in chunks of <= 25 using the SAME
+ * UnprocessedItems bounded-retry pattern as writeQuizItems/seedSampleData.
+ * Key shapes are kept identical (pk=`QUIZ#${quizId}`, sk='META' | `Q#${n}`).
+ */
+async function deleteQuizItems(quizId: string): Promise<void> {
+  const { meta, questions } = await getQuizItems(quizId);
+
+  const keys: { pk: string; sk: string }[] = [];
+  if (meta) {
+    keys.push({ pk: meta.pk, sk: meta.sk });
+  }
+  for (const q of questions) {
+    keys.push({ pk: q.pk, sk: q.sk });
+  }
+  if (keys.length === 0) {
+    return;
+  }
+
+  const table = tableName();
+  const chunkSize = 25;
+  for (let i = 0; i < keys.length; i += chunkSize) {
+    const chunk = keys.slice(i, i + chunkSize);
+    let requestItems: NonNullable<
+      ConstructorParameters<typeof BatchWriteCommand>[0]['RequestItems']
+    > = { [table]: chunk.map((Key) => ({ DeleteRequest: { Key } })) };
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await ddb.send(
+        new BatchWriteCommand({ RequestItems: requestItems }),
+      );
+      const unprocessed = res.UnprocessedItems ?? {};
+      if (!unprocessed[table] || unprocessed[table].length === 0) {
+        break;
+      }
+      requestItems = unprocessed;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+}
+
+/**
+ * Emit a small audit line for an authenticated admin call. API Gateway has
+ * already validated the Cognito JWT before the Lambda runs, so the caller's
+ * subject/username is read from the request context claims when available.
+ */
+function logAdminCaller(event: APIGatewayProxyEventV2, action: string): void {
+  const claims = (
+    event.requestContext as {
+      authorizer?: { jwt?: { claims?: Record<string, unknown> } };
+    }
+  ).authorizer?.jwt?.claims;
+  if (claims) {
+    // eslint-disable-next-line no-console
+    console.log(action, 'by', claims.sub ?? claims.username ?? 'unknown');
+  }
+}
+
 export const handler = async (
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyResultV2> => {
@@ -445,16 +555,7 @@ export const handler = async (
     if (routeKey === 'POST /api/admin/quizzes') {
       // API Gateway has already validated the Cognito JWT before invoking
       // this Lambda, so a request reaching this branch is authenticated.
-      // Emit a small audit line with the caller's subject when available.
-      const claims = (
-        event.requestContext as {
-          authorizer?: { jwt?: { claims?: Record<string, unknown> } };
-        }
-      ).authorizer?.jwt?.claims;
-      if (claims) {
-        // eslint-disable-next-line no-console
-        console.log('admin quiz create by', claims.sub ?? claims.username ?? 'unknown');
-      }
+      logAdminCaller(event, 'admin quiz create');
 
       let parsed: unknown;
       try {
@@ -481,6 +582,77 @@ export const handler = async (
         title: validated.quiz.title,
         questionCount: validated.quiz.questions.length,
       });
+    }
+
+    if (routeKey === 'GET /api/admin/quizzes/{quizId}') {
+      logAdminCaller(event, 'admin quiz read');
+      if (!quizId) {
+        return json(400, { message: 'quizId is required' });
+      }
+      const { meta, questions } = await getQuizItems(quizId);
+      if (!meta) {
+        return json(404, { message: 'quiz not found' });
+      }
+      // Admin read: INCLUDE answerIndex (do NOT strip) so the editor can
+      // pre-fill the correct answer. Questions are already sorted by n.
+      return json(200, {
+        quizId: meta.quizId,
+        title: meta.title,
+        questions: questions.map((q) => ({
+          n: q.n,
+          text: q.text,
+          options: q.options,
+          answerIndex: q.answerIndex,
+        })),
+      });
+    }
+
+    if (routeKey === 'PUT /api/admin/quizzes/{quizId}') {
+      logAdminCaller(event, 'admin quiz update');
+      if (!quizId) {
+        return json(400, { message: 'quizId is required' });
+      }
+      let parsed: unknown;
+      try {
+        parsed = event.body ? JSON.parse(event.body) : {};
+      } catch {
+        return json(400, { message: 'invalid JSON body' });
+      }
+
+      const validated = validateAndNormalizeQuizUpdate(parsed, quizId);
+      if (!validated.ok) {
+        return json(400, { message: validated.error });
+      }
+
+      // Edit (not create): the quiz must already exist.
+      const existing = await getQuizItems(quizId);
+      if (!existing.meta) {
+        return json(404, { message: 'quiz not found' });
+      }
+
+      // Full-replace: drop all existing items then write the new payload so
+      // META.questionCount and the Q#n items reflect the new quiz exactly.
+      await deleteQuizItems(quizId);
+      await writeQuizItems(validated.quiz);
+
+      return json(200, {
+        quizId: validated.quiz.quizId,
+        title: validated.quiz.title,
+        questionCount: validated.quiz.questions.length,
+      });
+    }
+
+    if (routeKey === 'DELETE /api/admin/quizzes/{quizId}') {
+      logAdminCaller(event, 'admin quiz delete');
+      if (!quizId) {
+        return json(400, { message: 'quizId is required' });
+      }
+      const { meta } = await getQuizItems(quizId);
+      if (!meta) {
+        return json(404, { message: 'quiz not found' });
+      }
+      await deleteQuizItems(quizId);
+      return json(200, { quizId, deleted: true });
     }
 
     return json(404, { message: 'not found' });
