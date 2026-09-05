@@ -1,0 +1,7 @@
+{
+  "task_id": "task-react-frontend",
+  "task_description": "Rebuild the Quiz App frontend as a modern, rich React + Vite + TypeScript SPA (user chose Option B), replacing the dependency-free vanilla-JS SPA. Preserve 100% of existing functionality and the EXACT API contract and Cognito Hosted UI auth model (no backend/CDK/Lambda changes). Deliver a card-based quiz list, progress indicator, engaging result screen with per-question feedback, responsive layout, and dark mode for the public flow; and the full authenticated admin quiz-builder with identical validation and answerIndex-over-non-empty-options semantics. Update amplify.yml for an npm Vite build with VITE_* env-var injection, update .gitignore and the Japanese README, and remove the old vanilla files. Commit onto feat/cdk-scaffold; do NOT push.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}

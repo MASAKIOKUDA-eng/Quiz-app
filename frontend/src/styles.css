@@ -1,0 +1,143 @@
+/*
+ * グローバルスタイル。旧 frontend/styles.css のカスタムプロパティ
+ * （--bg / --card / --primary / --text / --muted / --correct / --incorrect 等）を
+ * 移植・近代化し、prefers-color-scheme によるダークモードを追加する。
+ * これは FEAT-002 でリッチな UI を構築するためのデザイン基盤。
+ */
+
+:root {
+  --bg: #f5f7fa;
+  --card: #ffffff;
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --border: #d1d5db;
+  --card-border: #e5e7eb;
+  --hover: #eef2ff;
+  --correct: #16a34a;
+  --incorrect: #dc2626;
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ダークモード（OS 設定に追従）。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --primary: #3b82f6;
+    --primary-dark: #2563eb;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #334155;
+    --card-border: #334155;
+    --hover: #24324a;
+    --correct: #4ade80;
+    --incorrect: #f87171;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Hiragino Kaku Gothic ProN',
+    'Noto Sans JP', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+/* --- レイアウトコンテナ --- */
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+h1 {
+  text-align: center;
+  font-size: 1.6rem;
+}
+
+/* --- ステータス表示 --- */
+.status {
+  min-height: 1.4rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.status.error {
+  color: var(--incorrect);
+}
+
+/* --- カードのレイアウトプリミティブ --- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin: 0 0 1rem;
+  padding: 1rem;
+}
+
+/* --- ボタン --- */
+.btn {
+  display: inline-block;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 1rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn:hover {
+  background: var(--hover);
+}
+
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.btn.primary:hover {
+  background: var(--primary-dark);
+}
+
+.btn.small {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- リンク --- */
+a {
+  color: var(--primary);
+}
+
+.home-link {
+  text-align: center;
+  margin-top: 1.5rem;
+}
+
+.home-link a {
+  color: var(--muted);
+  font-size: 0.9rem;
+}

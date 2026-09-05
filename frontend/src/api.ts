@@ -1,0 +1,180 @@
+// 型付き API クライアント。バックエンド（lambda/index.ts）の契約を正確にミラーする。
+// 旧 frontend/app.js / admin.js の fetch セマンティクスをそのまま踏襲する。
+
+import { API_BASE } from './config';
+
+// ---- API の型定義（lambda/index.ts と一致させる） ----------------------
+
+/** GET /quizzes のクイズ要約。 */
+export interface QuizSummary {
+  quizId: string;
+  title: string;
+  questionCount: number;
+}
+
+/** GET /quizzes のレスポンス。 */
+export interface QuizListResponse {
+  quizzes: QuizSummary[];
+}
+
+/** 公開用の設問（answerIndex はサーバーで除外される）。 */
+export interface PublicQuestion {
+  n: number;
+  text: string;
+  options: string[];
+}
+
+/** GET /quizzes/{quizId} のレスポンス。 */
+export interface QuizDetail {
+  quizId: string;
+  title: string;
+  questions: PublicQuestion[];
+}
+
+/** POST /quizzes/{quizId}/submit のレスポンス（submit は answerIndex を返す）。 */
+export interface SubmitResult {
+  quizId: string;
+  score: number;
+  total: number;
+  results: { n: number; correct: boolean; answerIndex: number }[];
+}
+
+/** 管理者クイズ登録の設問入力。 */
+export interface AdminQuestionInput {
+  text: string;
+  options: string[];
+  answerIndex: number;
+}
+
+/** POST /admin/quizzes のリクエストボディ。 */
+export interface CreateQuizInput {
+  title: string;
+  questions: AdminQuestionInput[];
+  quizId?: string;
+}
+
+/** POST /admin/quizzes のレスポンス。 */
+export interface CreateQuizResponse {
+  quizId: string;
+  title: string;
+  questionCount: number;
+}
+
+// ---- エラー型 -----------------------------------------------------------
+
+/**
+ * 認証エラー（401）。UI はこれを捕捉してトークンをクリアし、再ログインを促す。
+ */
+export class AuthError extends Error {
+  constructor(message = 'ログインが必要です（認証エラー）') {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+
+const UNEXPECTED_NON_JSON =
+  'API から予期しない応答を受け取りました（JSON ではありません）。' +
+  'API のルーティング設定を確認してください。';
+
+// ---- 低レベル fetch ヘルパー -------------------------------------------
+
+function apiUrl(path: string): string {
+  return API_BASE + path;
+}
+
+/**
+ * 旧 app.js の fetchJson を踏襲。res.ok を確認し、content-type が
+ * application/json かどうかを防御的にチェックする（クロスオリジンでの
+ * 設定ミスに備える）。
+ */
+async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(apiUrl(path), options);
+  if (!res.ok) {
+    throw new Error('リクエストに失敗しました (' + res.status + ')');
+  }
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.indexOf('application/json') === -1) {
+    throw new Error(UNEXPECTED_NON_JSON);
+  }
+  return res.json() as Promise<T>;
+}
+
+// ---- 公開 API -----------------------------------------------------------
+
+/** クイズ一覧を取得する。 */
+export async function getQuizzes(): Promise<QuizListResponse> {
+  return fetchJson<QuizListResponse>('/quizzes');
+}
+
+/** 1 つのクイズ（設問付き）を取得する。 */
+export async function getQuiz(quizId: string): Promise<QuizDetail> {
+  return fetchJson<QuizDetail>('/quizzes/' + encodeURIComponent(quizId));
+}
+
+/**
+ * 回答を送信して採点結果を取得する。answers は設問の n をインデックスとした
+ * 選択肢番号の配列（未回答は -1）。
+ */
+export async function submitAnswers(
+  quizId: string,
+  answers: number[],
+): Promise<SubmitResult> {
+  return fetchJson<SubmitResult>(
+    '/quizzes/' + encodeURIComponent(quizId) + '/submit',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answers }),
+    },
+  );
+}
+
+// ---- 管理者 API ---------------------------------------------------------
+
+/**
+ * 管理者としてクイズを登録する。旧 admin.js の postJson のステータス処理を
+ * ミラーする:
+ *   - 401 -> AuthError（UI がトークンをクリアして再ログイン）
+ *   - 403 -> Error('権限がありません')
+ *   - その他の非 ok -> JSON ボディの message を優先、なければ汎用メッセージ
+ *   - 非 ok かつ JSON でない -> 予期しない応答メッセージ
+ */
+export async function createQuiz(
+  input: CreateQuizInput,
+  idToken: string,
+): Promise<CreateQuizResponse> {
+  const res = await fetch(apiUrl('/admin/quizzes'), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: 'Bearer ' + idToken,
+    },
+    body: JSON.stringify(input),
+  });
+
+  if (res.status === 401) {
+    throw new AuthError();
+  }
+  if (res.status === 403) {
+    throw new Error('権限がありません');
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  let data: unknown = null;
+  if (contentType.indexOf('application/json') !== -1) {
+    data = await res.json();
+  }
+
+  if (!res.ok) {
+    const message =
+      data && typeof data === 'object' && 'message' in data
+        ? String((data as { message: unknown }).message)
+        : 'リクエストに失敗しました (' + res.status + ')';
+    throw new Error(message);
+  }
+
+  if (data === null) {
+    throw new Error(UNEXPECTED_NON_JSON);
+  }
+  return data as CreateQuizResponse;
+}
