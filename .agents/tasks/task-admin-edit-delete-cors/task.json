@@ -1,0 +1,14 @@
+{
+  "task_id": "task-admin-edit-delete-cors",
+  "task_description": "Backend enhancement for the serverless quiz app (branch feat/admin-edit-delete-cors): add three JWT-authorized admin routes for a single quiz (GET answerIndex-inclusive read, PUT full-replace edit, DELETE) on the existing Lambda + HttpJwtAuthorizer, and tighten CORS end-to-end to the Amplify domain https://main.d2uwsqpk41y7so.amplifyapp.com (configurable per-deploy). Extend handler + stack tests and update the Japanese README. Frontend is out of scope (separate later PR). No push / no PR here.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "deferred",
+    "tests": "deferred",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "INTEGRATIONS_ONLY sandbox (no node_modules, npm registry 403), so npm run build / jest / cdk synth cannot run here; build+tests are deferred to the user's networked host via `npm ci && npm run build && npm test && npx cdk synth`. Read-based verification passed: handler routeKeys (GET/PUT/DELETE /api/admin/quizzes/{quizId}) exactly match the stack route paths+methods; the 3 new routes are bound to the existing single HttpJwtAuthorizer; public routes unchanged; deleteQuizItems reuses the <=25 BatchWrite UnprocessedItems-retry pattern with identical key shapes; full-replace edit deletes then rewrites so questionCount stays correct; admin GET includes answerIndex while public GET still strips it; CORS tightened end-to-end (API Gateway allowOrigins=[Amplify domain] via configurable `allowedOrigin` context + Lambda ALLOWED_ORIGIN env + json() header). Test quality: PASS - handler tests import the REAL exported validateAndNormalizeQuizUpdate (path-id-wins + all rejection cases) and stack tests assert 7 routes, JWT binding on all admin routes, public routes open, AllowOrigins literal (not '*'), PUT/DELETE in allowMethods, and the matching Lambda env var; each would fail if the change were reverted."
+  }
+}
