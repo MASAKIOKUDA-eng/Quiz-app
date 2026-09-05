@@ -5,8 +5,10 @@ node_modules
 .cdk.staging
 cdk.out
 
-# Generated TypeScript output (tsc). Targeted so frontend static assets are NOT ignored.
+# Generated TypeScript output (tsc). Targeted so frontend source is NOT ignored.
 *.d.ts
+# The frontend keeps a hand-written ambient type declaration in source.
+!frontend/src/vite-env.d.ts
 bin/*.js
 lib/*.js
 lambda/*.js
@@ -20,6 +22,12 @@ coverage
 # OS files
 .DS_Store
 
-# Never ignore the static frontend assets (plain JS shipped to S3/CloudFront)
-!frontend/
-!frontend/**
+# Frontend (React + Vite + TypeScript app under frontend/). Ignore build output
+# and installed dependencies, but keep the frontend SOURCE tracked.
+frontend/node_modules
+frontend/dist
+
+# Local env files for the Vite app (keep frontend/.env.example tracked).
+frontend/.env
+frontend/.env.local
+frontend/*.local
