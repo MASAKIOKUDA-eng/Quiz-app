@@ -1,0 +1,29 @@
+{
+  "project_type": "React 18 + Vite 5 + TypeScript 5 multi-page frontend (frontend/) for a serverless AWS quiz app. This task is FRONTEND-ONLY (PR-b).",
+  "language": "TypeScript (TSX) + CSS",
+  "build_system": "npm inside frontend/. Vite multi-page build. Scripts: dev='vite', build='tsc -b && vite build', preview='vite preview'.",
+  "test_framework": "No frontend unit tests exist. Verification is type-check + build via 'npm run build' (runs tsc then vite). Root project has jest for CDK/lambda but that is out of scope here.",
+  "build_command": "cd frontend && npm install && npm run build   (on the user's networked host; sandbox may need 'env -u NODE_OPTIONS' prefix)",
+  "test_command": "cd frontend && npm run build   (tsc type-check is the type gate; no separate frontend test suite)",
+  "verification_instructions": "Sandbox is INTEGRATIONS_ONLY: npm registry returns 403, so npm install / tsc / vite build CANNOT run here. Author everything correct-by-construction and verify by reading: valid TSX/TS/CSS, imports resolve, types line up with api.ts. Document exact commands for the user's networked EC2 host: 'cd frontend && npm install && npm run build' (and 'npm run dev' for local dev).",
+  "snapshot_or_generated_files": "None checked in. Vite build output frontend/dist is gitignored. Do NOT generate a lockfile (package-lock.json is created by the user's first npm install).",
+  "setup_instructions": "cd frontend; npm install; cp .env.example .env.local and set VITE_API_BASE / VITE_COGNITO_DOMAIN / VITE_COGNITO_CLIENT_ID; npm run dev.",
+  "environment_constraints": "INTEGRATIONS_ONLY network: no npm install, no tsc, no vite build, no external HTTP in the sandbox. All verification is read-based / correct-by-construction. Keep dependencies lean: app depends only on react + react-dom. Do NOT add a heavy UI framework; prefer hand-written CSS.",
+  "contribution_requirements": "Preserve the EXACT API contract, routes, Cognito auth model, sessionStorage token handling, and Japanese validation messages / microcopy semantics (wording may improve but validation rules and their meaning must stay). Keep the Vite multi-page structure and the real /admin.html + /index.html files (Cognito callback/logout URL is origin + /admin.html and must remain a real page). Do NOT touch backend (lambda/, lib/, test/), amplify.yml, or generate a lockfile.",
+  "key_patterns": "api.ts: fetchJson<T> helper (checks res.ok + content-type JSON); createQuiz(input, idToken) sets Authorization: Bearer <idToken>, throws AuthError on 401, Error('\u6a29\u9650\u304c\u3042\u308a\u307e\u305b\u3093') on 403, prefers JSON message on other non-ok, guards non-JSON. API_BASE from config.ts defaults to '/api'; api paths are relative like '/quizzes', '/admin/quizzes'. AdminPage.tsx: dynamic form with QuestionState/OptionRow row-id model (nextId), collectPayload() with exact JP validation messages and answerIndex-over-non-empty-options computation, Cognito login/logout, sessionStorage token via auth.ts, 401->clearToken+relogin, 403 handling, success result card. HomePage.tsx: list/quiz/result views, progress bar, score-ring, per-question feedback. styles.css: single stylesheet, CSS custom properties, prefers-color-scheme dark mode, classes: app/card/btn(primary/small)/status(error)/quiz-list/quiz-card/progress/score-ring/result-item/admin-toolbar/admin-form/admin-field/admin-input/admin-question/admin-option/option-correct/option-text/admin-question-controls/admin-actions/admin-result/home-link/empty-state.",
+  "relevant_files": [
+    "frontend/src/api.ts",
+    "frontend/src/pages/AdminPage.tsx",
+    "frontend/src/pages/HomePage.tsx",
+    "frontend/src/styles.css",
+    "frontend/src/auth.ts",
+    "frontend/src/config.ts",
+    "frontend/src/main.tsx",
+    "frontend/src/admin-main.tsx",
+    "frontend/index.html",
+    "frontend/admin.html",
+    "README.md"
+  ],
+  "directory_structure": "frontend/ is the React app. src/pages/ holds HomePage.tsx (public quiz flow, entry via index.html->main.tsx) and AdminPage.tsx (admin flow, entry via admin.html->admin-main.tsx). src/api.ts typed API client. src/auth.ts Cognito Hosted UI helpers. src/config.ts VITE_* env reader. src/styles.css single shared stylesheet. Backend (lambda/, lib/, test/) is OUT OF SCOPE.",
+  "backend_contract_pr_a": "Admin routes consumed by this PR (added by PR-a, not merged to main; mirror exactly in api.ts; all require Authorization: Bearer <idToken>, protected by Cognito JWT authorizer, base is API_BASE which is '.../api'): GET /admin/quizzes/{quizId} -> { quizId, title, questions: [{ n, text, options, answerIndex }] } (INCLUDES answerIndex for edit prefill; 404 if missing). PUT /admin/quizzes/{quizId} with body { title, questions: [{text, options[], answerIndex}] } -> full-replace; returns { quizId, title, questionCount }; 404 if quiz doesn't exist; body quizId ignored (path wins). DELETE /admin/quizzes/{quizId} -> { quizId, deleted: true }; 404 if missing. Reuse public GET /quizzes for the admin list view (returns quizId/title/questionCount, no answers). For EDIT prefill MUST use admin GET /admin/quizzes/{quizId} (answerIndex-inclusive) with bearer token, NOT public GET /quizzes/{quizId} which strips answerIndex. CORS restricted to Amplify origin in PR-a; no frontend change needed for that."
+}

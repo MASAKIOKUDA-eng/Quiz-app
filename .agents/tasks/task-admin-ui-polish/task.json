@@ -1,0 +1,14 @@
+{
+  "task_id": "task-admin-ui-polish",
+  "task_description": "Frontend-only (PR-b): add an admin quiz MANAGEMENT UI (list existing quizzes, edit via full-replace PUT with answerIndex-inclusive prefill, delete with a confirmation dialog) to the React admin page, extend the typed API client with the three new admin routes (getAdminQuiz/updateQuiz/deleteQuiz) mirroring createQuiz's auth+error semantics, and apply general UI polish across both pages (palette, spacing, typography, buttons/cards, quiz feedback/animations, result screen, empty/loading/error states, microcopy, mobile responsiveness, improved dark mode). Preserve the exact API contract, Cognito auth model, sessionStorage token handling, Japanese validation messages, and the Vite multi-page structure. No backend/amplify.yml/lockfile changes. Commit onto feat/admin-ui-polish; do not push.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "skipped",
+    "tests": "skipped",
+    "test_quality": "n/a",
+    "docker_build": "skipped",
+    "summary": "Sandbox is INTEGRATIONS_ONLY (npm registry 403), so npm install / tsc / vite build cannot run here; verification is read-based / correct-by-construction per the environment constraint. Structural checks passed: styles.css braces balanced (117/117); all new admin classes (admin-quiz-list-card/header/list/item/title/count/actions, admin-mode-heading) and result-message are styled; score-ring --percent conic-gradient mechanism, dark-mode, and prefers-reduced-motion guard intact; :has() selectors are progressive enhancements. HomePage.tsx behavior fully preserved (list/quiz/result view model, answers=-1 logic, submit, scoring, aria-labels, --percent inline style) with only microcopy/encouragement additions. AdminPage validation messages byte-identical; api.ts admin methods mirror createQuiz auth/error semantics. No new npm dependency, no lockfile. Backend/lambda/lib/test/amplify.yml untouched. No frontend unit test suite exists, so there is nothing to assess for test quality. The user must run 'cd frontend && npm install && npm run build' on a networked host to complete the tsc + vite build gate."
+  }
+}

@@ -60,6 +60,43 @@ export interface CreateQuizResponse {
   questionCount: number;
 }
 
+/**
+ * 管理者向け設問（GET /admin/quizzes/{quizId} が返す）。編集画面のプリフィル用に
+ * answerIndex を含む（公開用 PublicQuestion とは異なり正解を隠さない）。
+ */
+export interface AdminQuestion {
+  n: number;
+  text: string;
+  options: string[];
+  answerIndex: number;
+}
+
+/** GET /admin/quizzes/{quizId} のレスポンス。 */
+export interface AdminQuizDetail {
+  quizId: string;
+  title: string;
+  questions: AdminQuestion[];
+}
+
+/** PUT /admin/quizzes/{quizId} のリクエストボディ（全置換）。 */
+export interface UpdateQuizInput {
+  title: string;
+  questions: AdminQuestionInput[];
+}
+
+/** PUT /admin/quizzes/{quizId} のレスポンス。 */
+export interface UpdateQuizResponse {
+  quizId: string;
+  title: string;
+  questionCount: number;
+}
+
+/** DELETE /admin/quizzes/{quizId} のレスポンス。 */
+export interface DeleteQuizResponse {
+  quizId: string;
+  deleted: boolean;
+}
+
 // ---- エラー型 -----------------------------------------------------------
 
 /**
@@ -132,24 +169,32 @@ export async function submitAnswers(
 // ---- 管理者 API ---------------------------------------------------------
 
 /**
- * 管理者としてクイズを登録する。旧 admin.js の postJson のステータス処理を
- * ミラーする:
+ * 認証付き管理者リクエストの共通ヘルパー。旧 admin.js の postJson の
+ * ステータス処理を全メソッド共通でミラーする:
+ *   - Authorization: Bearer <idToken> を必ず付与する
+ *   - body がある場合のみ content-type: application/json を付与し JSON 送信する
  *   - 401 -> AuthError（UI がトークンをクリアして再ログイン）
  *   - 403 -> Error('権限がありません')
  *   - その他の非 ok -> JSON ボディの message を優先、なければ汎用メッセージ
- *   - 非 ok かつ JSON でない -> 予期しない応答メッセージ
+ *   - ok だが JSON でない -> 予期しない応答メッセージ
  */
-export async function createQuiz(
-  input: CreateQuizInput,
+async function adminRequest<T>(
+  path: string,
+  method: string,
   idToken: string,
-): Promise<CreateQuizResponse> {
-  const res = await fetch(apiUrl('/admin/quizzes'), {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: 'Bearer ' + idToken,
-    },
-    body: JSON.stringify(input),
+  body?: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    authorization: 'Bearer ' + idToken,
+  };
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json';
+  }
+
+  const res = await fetch(apiUrl(path), {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
   if (res.status === 401) {
@@ -176,5 +221,67 @@ export async function createQuiz(
   if (data === null) {
     throw new Error(UNEXPECTED_NON_JSON);
   }
-  return data as CreateQuizResponse;
+  return data as T;
+}
+
+/**
+ * 管理者としてクイズを登録する。上記 adminRequest の共通セマンティクスを用いる。
+ */
+export async function createQuiz(
+  input: CreateQuizInput,
+  idToken: string,
+): Promise<CreateQuizResponse> {
+  return adminRequest<CreateQuizResponse>(
+    '/admin/quizzes',
+    'POST',
+    idToken,
+    input,
+  );
+}
+
+/**
+ * 管理者としてクイズ（正解 answerIndex 込み）を取得する。編集画面のプリフィル用。
+ * 存在しない場合はサーバーの 404 JSON message を含む Error を投げる。
+ */
+export async function getAdminQuiz(
+  quizId: string,
+  idToken: string,
+): Promise<AdminQuizDetail> {
+  return adminRequest<AdminQuizDetail>(
+    '/admin/quizzes/' + encodeURIComponent(quizId),
+    'GET',
+    idToken,
+  );
+}
+
+/**
+ * 管理者としてクイズを全置換で更新する（PUT）。body の quizId は無視され、
+ * パスの quizId が優先される。存在しない場合は 404 の message を投げる。
+ */
+export async function updateQuiz(
+  quizId: string,
+  input: UpdateQuizInput,
+  idToken: string,
+): Promise<UpdateQuizResponse> {
+  return adminRequest<UpdateQuizResponse>(
+    '/admin/quizzes/' + encodeURIComponent(quizId),
+    'PUT',
+    idToken,
+    input,
+  );
+}
+
+/**
+ * 管理者としてクイズを削除する（DELETE、ボディなし）。存在しない場合は
+ * 404 の message を投げる。
+ */
+export async function deleteQuiz(
+  quizId: string,
+  idToken: string,
+): Promise<DeleteQuizResponse> {
+  return adminRequest<DeleteQuizResponse>(
+    '/admin/quizzes/' + encodeURIComponent(quizId),
+    'DELETE',
+    idToken,
+  );
 }
