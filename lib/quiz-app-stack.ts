@@ -6,6 +6,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
@@ -94,6 +96,106 @@ export class QuizAppStack extends cdk.Stack {
       },
     });
 
+    // ---------------------------------------------------------------
+    // (c.1) Amazon Cognito: admin authentication for the write API.
+    //
+    //   - A User Pool with sign-in by email. Self sign-up is DISABLED so
+    //     only an operator can create admin users (via the console/CLI:
+    //     `aws cognito-idp admin-create-user ...`). No idle cost.
+    //   - A Hosted UI domain (Cognito prefix domain). The prefix MUST be
+    //     globally unique across all AWS accounts, so it is derived from
+    //     the AWS account id (`quiz-admin-<accountId>`) to keep it stable
+    //     and unique without manual coordination. Override with the
+    //     `cognitoDomainPrefix` CDK context value if the derived name is
+    //     already taken (e.g. `-c cognitoDomainPrefix=my-unique-prefix`).
+    //   - A PUBLIC app client (no client secret) suitable for a browser
+    //     SPA, with the Hosted UI OAuth flows enabled.
+    //
+    //   The admin SPA's base URL is not known at synth time (it becomes an
+    //   Amplify Hosting domain later), so callback/logout URLs are driven
+    //   by the `adminAppBaseUrl` CfnParameter (default http://localhost:8080
+    //   for local testing). Update the app client callback/logout URLs with
+    //   the real Amplify domain after connecting the repo to Amplify.
+    // ---------------------------------------------------------------
+    const adminAppBaseUrl = new cdk.CfnParameter(this, 'adminAppBaseUrl', {
+      type: 'String',
+      default: 'http://localhost:8080',
+      description:
+        'Base URL of the admin SPA (Amplify Hosting domain in production). Used to build the Cognito Hosted UI callback/logout URLs. Update after connecting the repo to Amplify.',
+    });
+
+    const userPool = new cognito.UserPool(this, 'AdminUserPool', {
+      // Only an operator creates admin users; public sign-up is off.
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      standardAttributes: {
+        email: { required: true, mutable: false },
+      },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: false,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // Demo stack: allow the pool to be torn down with the stack.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Hosted UI domain prefix. Must be globally unique; derive from the
+    // account id and allow an override via CDK context.
+    const domainPrefix =
+      (this.node.tryGetContext('cognitoDomainPrefix') as string | undefined) ??
+      `quiz-admin-${cdk.Stack.of(this).account}`;
+
+    userPool.addDomain('AdminUserPoolDomain', {
+      cognitoDomain: { domainPrefix },
+    });
+
+    // Callback/logout URLs: the admin page is served at `/admin.html`.
+    const callbackUrls = [
+      `${adminAppBaseUrl.valueAsString}/admin.html`,
+      'http://localhost:8080/admin.html',
+    ];
+    const logoutUrls = [
+      `${adminAppBaseUrl.valueAsString}/admin.html`,
+      'http://localhost:8080/admin.html',
+    ];
+
+    const userPoolClient = userPool.addClient('AdminAppClient', {
+      // Public browser client: NO client secret.
+      generateSecret: false,
+      authFlows: { userSrp: true },
+      oAuth: {
+        flows: {
+          authorizationCodeGrant: true,
+          implicitCodeGrant: true,
+        },
+        scopes: [
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls,
+        logoutUrls,
+      },
+    });
+
+    // JWT authorizer bound to the user pool issuer. The audience is the
+    // app client id. API Gateway validates the JWT before invoking the
+    // Lambda, so the admin handler branch can trust the caller.
+    const issuer = `https://cognito-idp.${cdk.Stack.of(this).region}.amazonaws.com/${userPool.userPoolId}`;
+    const adminJwtAuthorizer = new HttpJwtAuthorizer(
+      'AdminJwtAuthorizer',
+      issuer,
+      {
+        jwtAudience: [userPoolClient.userPoolClientId],
+        identitySource: ['$request.header.Authorization'],
+      },
+    );
+
     // Routes are registered under an `/api` prefix so the SPA can reach
     // them same-origin via the CloudFront `/api/*` cache behavior without
     // any path rewriting at the edge.
@@ -111,6 +213,15 @@ export class QuizAppStack extends cdk.Stack {
       path: '/api/quizzes/{quizId}/submit',
       methods: [apigwv2.HttpMethod.POST],
       integration,
+    });
+
+    // Authenticated admin write route: create a quiz. Protected by the
+    // Cognito JWT authorizer; the three routes above stay OPEN.
+    httpApi.addRoutes({
+      path: '/api/admin/quizzes',
+      methods: [apigwv2.HttpMethod.POST],
+      integration,
+      authorizer: adminJwtAuthorizer,
     });
 
     // ---------------------------------------------------------------
@@ -201,6 +312,22 @@ export class QuizAppStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'TableName', {
       value: table.tableName,
       description: 'DynamoDB table name',
+    });
+
+    // Cognito outputs consumed by the admin SPA and for bootstrapping the
+    // first admin user.
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool id (admin authentication)',
+    });
+    new cdk.CfnOutput(this, 'UserPoolClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito User Pool app client id (public browser client)',
+    });
+    new cdk.CfnOutput(this, 'UserPoolHostedUiDomain', {
+      value: `https://${domainPrefix}.auth.${cdk.Stack.of(this).region}.amazoncognito.com`,
+      description:
+        'Cognito Hosted UI base URL. The admin SPA redirects here for login. The domain prefix must be globally unique.',
     });
   }
 }

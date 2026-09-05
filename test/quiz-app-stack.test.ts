@@ -43,17 +43,70 @@ describe('QuizAppStack', () => {
     });
   });
 
-  test('defines the three expected routes', () => {
+  test('defines the four expected routes', () => {
     const routeKeys = [
       'GET /api/quizzes',
       'GET /api/quizzes/{quizId}',
       'POST /api/quizzes/{quizId}/submit',
+      'POST /api/admin/quizzes',
     ];
-    // There should be exactly three routes wired up.
+    // There should be exactly four routes wired up (3 public + 1 admin).
     template.resourceCountIs('AWS::ApiGatewayV2::Route', routeKeys.length);
     for (const routeKey of routeKeys) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
         RouteKey: routeKey,
+      });
+    }
+  });
+
+  test('provisions a Cognito User Pool with self sign-up disabled', () => {
+    template.resourceCountIs('AWS::Cognito::UserPool', 1);
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      AdminCreateUserConfig: Match.objectLike({
+        AllowAdminCreateUserOnly: true,
+      }),
+    });
+  });
+
+  test('provisions a public User Pool client (no client secret)', () => {
+    template.resourceCountIs('AWS::Cognito::UserPoolClient', 1);
+    template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      GenerateSecret: false,
+    });
+  });
+
+  test('provisions a Cognito Hosted UI domain', () => {
+    template.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
+  });
+
+  test('defines a JWT authorizer for the admin route', () => {
+    template.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
+    template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
+      AuthorizerType: 'JWT',
+    });
+  });
+
+  test('admin route is protected by the JWT authorizer', () => {
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /api/admin/quizzes',
+      AuthorizationType: 'JWT',
+      AuthorizerId: Match.anyValue(),
+    });
+  });
+
+  test('public routes have no authorizer', () => {
+    const publicRouteKeys = [
+      'GET /api/quizzes',
+      'GET /api/quizzes/{quizId}',
+      'POST /api/quizzes/{quizId}/submit',
+    ];
+    for (const routeKey of publicRouteKeys) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+        // Public routes are open: no AuthorizerId is attached and the
+        // authorization type renders as 'NONE'.
+        AuthorizerId: Match.absent(),
+        AuthorizationType: 'NONE',
       });
     }
   });
