@@ -13,9 +13,11 @@ import {
   type QuizDetail,
   type SubmitResult,
 } from '../api';
+import { append, makeRecord } from '../history';
+import HistoryView from './HistoryView';
 
-// 表示ビュー。旧 app.js の show('list'|'quiz'|'result') をミラーする。
-type View = 'list' | 'quiz' | 'result';
+// 表示ビュー。旧 app.js の show('list'|'quiz'|'result') をミラーしつつ、履歴画面を追加。
+type View = 'list' | 'quiz' | 'result' | 'history';
 
 interface Status {
   message: string;
@@ -88,6 +90,17 @@ export default function HomePage() {
       try {
         const res = await submitAnswers(quiz.quizId, answers);
         setResult(res);
+        // 採点成功時に履歴を 1 回だけ記録する。render / useEffect ではなく、この
+        // 非同期コールバック内で行うことで、React.StrictMode の二重実行や再レンダーで
+        // 重複記録されるのを防ぐ。
+        append(
+          makeRecord({
+            quizId: quiz.quizId,
+            title: quiz.title,
+            score: res.score,
+            total: res.total,
+          }),
+        );
         setStatus(EMPTY_STATUS);
         setView('result');
       } catch (err) {
@@ -104,7 +117,11 @@ export default function HomePage() {
       </p>
 
       {view === 'list' && (
-        <QuizList quizzes={quizzes} onSelect={loadQuiz} />
+        <QuizList
+          quizzes={quizzes}
+          onSelect={loadQuiz}
+          onViewHistory={() => setView('history')}
+        />
       )}
 
       {view === 'quiz' && currentQuiz && (
@@ -122,8 +139,11 @@ export default function HomePage() {
           result={result}
           quiz={currentQuiz}
           onRestart={loadQuizzes}
+          onViewHistory={() => setView('history')}
         />
       )}
+
+      {view === 'history' && <HistoryView onBack={() => setView('list')} />}
 
       <div className="home-link">
         <a href="admin.html">管理者ページへ</a>
@@ -137,34 +157,50 @@ export default function HomePage() {
 function QuizList({
   quizzes,
   onSelect,
+  onViewHistory,
 }: {
   quizzes: QuizSummary[];
   onSelect: (quizId: string) => void;
+  onViewHistory: () => void;
 }) {
   if (quizzes.length === 0) {
     return (
-      <p className="empty-state">
-        まだクイズがありません。管理者ページから作成できます。
-      </p>
+      <>
+        <p className="empty-state">
+          まだクイズがありません。管理者ページから作成できます。
+        </p>
+        <div className="quiz-actions">
+          <button type="button" className="btn" onClick={onViewHistory}>
+            履歴を見る
+          </button>
+        </div>
+      </>
     );
   }
   return (
-    <ul className="quiz-list">
-      {quizzes.map((quiz) => (
-        <li key={quiz.quizId}>
-          <button
-            type="button"
-            className="card quiz-card"
-            onClick={() => onSelect(quiz.quizId)}
-          >
-            <span className="quiz-card-title">{quiz.title}</span>
-            <span className="quiz-card-count">
-              （全{quiz.questionCount}問）
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="quiz-list">
+        {quizzes.map((quiz) => (
+          <li key={quiz.quizId}>
+            <button
+              type="button"
+              className="card quiz-card"
+              onClick={() => onSelect(quiz.quizId)}
+            >
+              <span className="quiz-card-title">{quiz.title}</span>
+              <span className="quiz-card-count">
+                （全{quiz.questionCount}問）
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="quiz-actions">
+        <button type="button" className="btn" onClick={onViewHistory}>
+          履歴を見る
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -240,10 +276,12 @@ function QuizResult({
   result,
   quiz,
   onRestart,
+  onViewHistory,
 }: {
   result: SubmitResult;
   quiz: QuizDetail | null;
   onRestart: () => void;
+  onViewHistory: () => void;
 }) {
   const percent =
     result.total > 0 ? Math.round((result.score / result.total) * 100) : 0;
@@ -309,6 +347,9 @@ function QuizResult({
       <div className="quiz-actions">
         <button type="button" className="btn primary" onClick={onRestart}>
           もう一度クイズを選ぶ
+        </button>
+        <button type="button" className="btn" onClick={onViewHistory}>
+          履歴を見る
         </button>
       </div>
     </section>
