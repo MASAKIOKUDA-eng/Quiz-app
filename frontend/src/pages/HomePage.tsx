@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type CSSProperties,
@@ -16,8 +17,13 @@ import {
 import { append, makeRecord } from '../history';
 import HistoryView from './HistoryView';
 
-// 表示ビュー。旧 app.js の show('list'|'quiz'|'result') をミラーしつつ、履歴画面を追加。
-type View = 'list' | 'quiz' | 'result' | 'history';
+// 表示ビュー。旧 app.js の show('list'|'quiz'|'result') をミラーしつつ、履歴画面と
+// 回答方式の選択画面（chooseMode）を追加。
+type View = 'list' | 'chooseMode' | 'quiz' | 'result' | 'history';
+
+// 回答方式。'all' は従来の一括表示、'oneByOne' は一問一答。
+// どちらのモードも同じ selected 状態・同じ採点/結果/履歴の経路を共有する。
+type AnswerMode = 'all' | 'oneByOne';
 
 interface Status {
   message: string;
@@ -38,6 +44,8 @@ export default function HomePage() {
   // 選択中の回答。設問の n をキーに、選択肢インデックスを保持する。
   const [selected, setSelected] = useState<Record<number, number>>({});
   const [result, setResult] = useState<SubmitResult | null>(null);
+  // 回答方式。クイズ開始時に選択する（既定は従来どおり一括表示）。
+  const [mode, setMode] = useState<AnswerMode>('all');
 
   // 初回マウントでクイズ一覧を読み込む。
   useEffect(() => {
@@ -64,10 +72,17 @@ export default function HomePage() {
       setSelected({});
       setResult(null);
       setStatus(EMPTY_STATUS);
-      setView('quiz');
+      // フェッチは単一の入口のまま。成功後は回答方式の選択画面へ遷移する。
+      setView('chooseMode');
     } catch (err) {
       setStatus({ message: errorMessage(err), isError: true });
     }
+  }
+
+  // 回答方式を確定してクイズ回答画面へ進む。selected は loadQuiz で既にリセット済み。
+  function startQuiz(chosen: AnswerMode): void {
+    setMode(chosen);
+    setView('quiz');
   }
 
   function selectOption(questionN: number, optionIndex: number): void {
@@ -124,15 +139,33 @@ export default function HomePage() {
         />
       )}
 
-      {view === 'quiz' && currentQuiz && (
-        <QuizTaking
+      {view === 'chooseMode' && currentQuiz && (
+        <ModeChooser
           quiz={currentQuiz}
-          selected={selected}
-          onSelect={selectOption}
-          onSubmit={handleSubmit}
+          onChoose={startQuiz}
           onBack={() => setView('list')}
         />
       )}
+
+      {view === 'quiz' &&
+        currentQuiz &&
+        (mode === 'oneByOne' ? (
+          <QuizTakingOneByOne
+            quiz={currentQuiz}
+            selected={selected}
+            onSelect={selectOption}
+            onSubmit={handleSubmit}
+            onBack={() => setView('list')}
+          />
+        ) : (
+          <QuizTaking
+            quiz={currentQuiz}
+            selected={selected}
+            onSelect={selectOption}
+            onSubmit={handleSubmit}
+            onBack={() => setView('list')}
+          />
+        ))}
 
       {view === 'result' && result && (
         <QuizResult
@@ -264,6 +297,156 @@ function QuizTaking({
           <button type="submit" className="btn primary">
             回答する
           </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+// ---- 回答方式の選択画面 --------------------------------------------------
+
+function ModeChooser({
+  quiz,
+  onChoose,
+  onBack,
+}: {
+  quiz: QuizDetail;
+  onChoose: (mode: AnswerMode) => void;
+  onBack: () => void;
+}) {
+  return (
+    <section className="mode-chooser">
+      <h2 className="quiz-heading">{quiz.title}</h2>
+      <p className="mode-chooser-label">回答方式を選んでください</p>
+
+      <div className="mode-options">
+        <button
+          type="button"
+          className="card mode-option"
+          onClick={() => onChoose('all')}
+        >
+          <span className="mode-option-title">一括表示</span>
+          <span className="mode-option-desc">
+            すべての設問を 1 画面にまとめて表示します。
+          </span>
+        </button>
+        <button
+          type="button"
+          className="card mode-option"
+          onClick={() => onChoose('oneByOne')}
+        >
+          <span className="mode-option-title">一問一答</span>
+          <span className="mode-option-desc">
+            1 問ずつ順番に表示します。前へ / 次へで移動できます。
+          </span>
+        </button>
+      </div>
+
+      <div className="quiz-actions">
+        <button type="button" className="btn" onClick={onBack}>
+          一覧に戻る
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ---- クイズ回答画面（一問一答） ------------------------------------------
+
+function QuizTakingOneByOne({
+  quiz,
+  selected,
+  onSelect,
+  onSubmit,
+  onBack,
+}: {
+  quiz: QuizDetail;
+  selected: Record<number, number>;
+  onSelect: (questionN: number, optionIndex: number) => void;
+  onSubmit: (event: React.FormEvent) => void;
+  onBack: () => void;
+}) {
+  const total = quiz.questions.length;
+  // 表示中の設問（0 始まりのインデックス）。
+  const [current, setCurrent] = useState(0);
+  const legendRef = useRef<HTMLLegendElement | null>(null);
+  // 初回マウントで不用意にフォーカスを奪わないためのガード。
+  const mountedRef = useRef(false);
+
+  // 設問を移動したら新しい設問の見出しへフォーカスを移す（初期マウントは除く）。
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
+    legendRef.current?.focus();
+  }, [current]);
+
+  const q = quiz.questions[current];
+  const answered = quiz.questions.filter((qq) => qq.n in selected).length;
+  const percent = total > 0 ? Math.round((answered / total) * 100) : 0;
+  const isLast = current === total - 1;
+
+  return (
+    <section className="one-by-one">
+      <h2 className="quiz-heading">{quiz.title}</h2>
+
+      <div className="progress" aria-label={'Q ' + (current + 1) + ' / ' + total}>
+        <div className="progress-label">
+          Q {current + 1} / {total}（回答済み {answered} / {total}）
+        </div>
+        <div className="progress-bar">
+          <div
+            className="progress-bar-fill"
+            style={{ width: percent + '%' }}
+          />
+        </div>
+      </div>
+
+      <form onSubmit={onSubmit}>
+        <fieldset className="card question" key={q.n}>
+          <legend tabIndex={-1} ref={legendRef}>
+            Q{q.n + 1}. {q.text}
+          </legend>
+          {q.options.map((option, optIdx) => (
+            <label className="option" key={optIdx}>
+              <input
+                type="radio"
+                name={'q' + q.n}
+                value={String(optIdx)}
+                checked={selected[q.n] === optIdx}
+                onChange={() => onSelect(q.n, optIdx)}
+              />
+              <span> {option}</span>
+            </label>
+          ))}
+        </fieldset>
+
+        <div className="quiz-actions">
+          <button type="button" className="btn" onClick={onBack}>
+            一覧に戻る
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setCurrent((c) => Math.max(0, c - 1))}
+            disabled={current === 0}
+          >
+            前へ
+          </button>
+          {isLast ? (
+            <button type="submit" className="btn primary">
+              回答する
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => setCurrent((c) => Math.min(total - 1, c + 1))}
+            >
+              次へ
+            </button>
+          )}
         </div>
       </form>
     </section>
