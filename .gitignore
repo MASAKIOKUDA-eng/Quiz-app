@@ -1,0 +1,25 @@
+# Node dependencies
+node_modules
+
+# CDK asset staging directory / synth output
+.cdk.staging
+cdk.out
+
+# Generated TypeScript output (tsc). Targeted so frontend static assets are NOT ignored.
+*.d.ts
+bin/*.js
+lib/*.js
+lambda/*.js
+
+# Test coverage
+coverage
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+# Never ignore the static frontend assets (plain JS shipped to S3/CloudFront)
+!frontend/
+!frontend/**
