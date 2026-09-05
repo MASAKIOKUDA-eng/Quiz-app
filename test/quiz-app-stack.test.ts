@@ -111,35 +111,37 @@ describe('QuizAppStack', () => {
     }
   });
 
-  test('fronts the SPA with a CloudFront distribution using PriceClass_100', () => {
-    template.resourceCountIs('AWS::CloudFront::Distribution', 1);
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        PriceClass: 'PriceClass_100',
+  test('does NOT host the frontend via CloudFront or an S3 site bucket', () => {
+    // FEAT-004: the frontend moved to Amplify Hosting (console-managed).
+    // The old S3 static-site bucket + CloudFront distribution were removed,
+    // so the synthesized template must contain neither. (No other resource
+    // in this stack legitimately creates a CloudFront distribution or an
+    // S3 bucket, so a plain count-of-zero assertion is safe.)
+    template.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    template.resourceCountIs('AWS::S3::Bucket', 0);
+  });
+
+  test('HTTP API CORS allows cross-origin calls including the authorization header', () => {
+    // The Amplify-hosted SPA calls the API cross-origin. The admin route
+    // sends `Authorization: Bearer <jwt>`, so the CORS preflight must allow
+    // the 'authorization' header (alongside 'content-type').
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      ProtocolType: 'HTTP',
+      CorsConfiguration: Match.objectLike({
+        AllowHeaders: Match.arrayWith(['authorization']),
+        AllowMethods: Match.arrayWith(['GET', 'POST', 'OPTIONS']),
       }),
     });
   });
 
-  test('routes /api/* through CloudFront to the HTTP API origin', () => {
-    // The SPA reaches the API same-origin via a dedicated cache behavior,
-    // so no manual config.js edit is required after deploy.
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        CacheBehaviors: Match.arrayWith([
-          Match.objectLike({ PathPattern: 'api/*' }),
-        ]),
-      }),
-    });
-  });
-
-  test('static site bucket blocks all public access', () => {
-    template.hasResourceProperties('AWS::S3::Bucket', {
-      PublicAccessBlockConfiguration: {
-        BlockPublicAcls: true,
-        BlockPublicPolicy: true,
-        IgnorePublicAcls: true,
-        RestrictPublicBuckets: true,
-      },
-    });
+  test('exposes only the expected CfnOutputs (CloudFrontDomain removed)', () => {
+    // ApiEndpoint / TableName / Cognito outputs remain; the CloudFrontDomain
+    // output is gone now that CloudFront hosting was removed.
+    template.hasOutput('ApiEndpoint', {});
+    template.hasOutput('TableName', {});
+    template.hasOutput('UserPoolId', {});
+    template.hasOutput('UserPoolClientId', {});
+    template.hasOutput('UserPoolHostedUiDomain', {});
+    expect(() => template.hasOutput('CloudFrontDomain', {})).toThrow();
   });
 });

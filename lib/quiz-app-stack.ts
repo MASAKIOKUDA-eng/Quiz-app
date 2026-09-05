@@ -8,10 +8,6 @@ import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
-import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 
 /**
  * QuizAppStack
@@ -20,9 +16,24 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
  *  - DynamoDB single-table, PAY_PER_REQUEST (on-demand => no idle cost).
  *  - A single ARM64 (Graviton) Lambda behind an API Gateway v2 HTTP API
  *    (HTTP API is cheaper than REST API). Lambda scales to zero.
- *  - Static SPA hosted in a private S3 bucket fronted by CloudFront with
- *    Origin Access Control (PRICE_CLASS_100 = cheapest edge footprint).
  *  - No VPC and no NAT gateway, so there is no always-on/idle compute cost.
+ *
+ * Frontend hosting (FEAT-004): the SPA is served by AWS Amplify Hosting
+ * (Hosting/CI-CD only, NOT an Amplify backend), connected to the Git repo
+ * via the Amplify console. The previous private-S3 + CloudFront static
+ * hosting was REMOVED here on purpose:
+ *   1. Amplify Hosting now serves the SPA, so keeping S3 + CloudFront for
+ *      the same job is redundant.
+ *   2. That CloudFront distribution required a distribution-wide
+ *      403/404 -> index.html rewrite for SPA routing, which also clobbered
+ *      the API's legitimate 4xx JSON responses (they came back as
+ *      index.html/200). Dropping CloudFront removes that footgun.
+ * Because the SPA is now served from the Amplify origin and calls the API
+ * cross-origin, the HTTP API CORS config below allows cross-origin calls
+ * (including the Authorization header for the admin route). The Amplify App
+ * is intentionally NOT defined in CDK (that needs @aws-cdk/aws-amplify-alpha
+ * plus a Git token); the operator connects the repo in the Amplify console.
+ * See README.md for the Amplify Hosting setup.
  */
 export class QuizAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -76,15 +87,21 @@ export class QuizAppStack extends cdk.Stack {
 
     const httpApi = new apigwv2.HttpApi(this, 'QuizHttpApi', {
       description: 'Serverless quiz HTTP API',
-      // CORS: the SPA calls the API same-origin through the CloudFront
-      // `/api/*` behavior (see below), so browsers do not normally issue
-      // cross-origin preflights. `allowOrigins: ['*']` is kept as a
-      // conscious trade-off so the API also stays usable directly (e.g.
-      // curl, or a custom domain) for this public, unauthenticated demo
-      // that persists no per-user data. Tighten to the CloudFront domain
-      // if this ever carries private data. Note: the CloudFront domain is
-      // created in this same stack, so referencing it here would introduce
-      // a circular dependency; same-origin routing avoids needing it.
+      // CORS: the SPA is served by Amplify Hosting (a different origin than
+      // this API), so the browser makes CROSS-ORIGIN calls and issues CORS
+      // preflights. We therefore allow:
+      //   - GET/POST/OPTIONS methods (OPTIONS for the preflight itself),
+      //   - both 'content-type' AND 'authorization' headers. The admin route
+      //     (POST /api/admin/quizzes) sends `Authorization: Bearer <jwt>`, so
+      //     'authorization' MUST be in allowHeaders or the preflight fails.
+      // `allowOrigins: ['*']` is kept as a conscious trade-off for this
+      // public, unauthenticated demo (the only authenticated route is the
+      // admin write route, which is additionally protected by the Cognito
+      // JWT authorizer regardless of CORS). SECURITY NOTE: tighten
+      // allowOrigins to the real Amplify domain (e.g.
+      // ['https://main.<appId>.amplifyapp.com']) once it is known - see
+      // README.md. CORS is a browser-side control and does not by itself
+      // authorize the API, but narrowing the origin is good hygiene.
       corsPreflight: {
         allowOrigins: ['*'],
         allowMethods: [
@@ -92,7 +109,7 @@ export class QuizAppStack extends cdk.Stack {
           apigwv2.CorsHttpMethod.POST,
           apigwv2.CorsHttpMethod.OPTIONS,
         ],
-        allowHeaders: ['content-type'],
+        allowHeaders: ['content-type', 'authorization'],
       },
     });
 
@@ -196,9 +213,9 @@ export class QuizAppStack extends cdk.Stack {
       },
     );
 
-    // Routes are registered under an `/api` prefix so the SPA can reach
-    // them same-origin via the CloudFront `/api/*` cache behavior without
-    // any path rewriting at the edge.
+    // Routes are registered under an `/api` prefix. The SPA (served from
+    // Amplify Hosting) reaches them cross-origin at
+    // `<ApiEndpoint>/api/...`; CORS above permits those calls.
     httpApi.addRoutes({
       path: '/api/quizzes',
       methods: [apigwv2.HttpMethod.GET],
@@ -225,77 +242,19 @@ export class QuizAppStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------
-    // (d) Static site: private S3 bucket + CloudFront (OAC).
+    // (d) Frontend hosting.
+    //
+    //   The static SPA is hosted by AWS Amplify Hosting, connected to the
+    //   Git repository via the Amplify console (Hosting only, no Amplify
+    //   backend). See README.md and amplify.yml. There is intentionally NO
+    //   S3 + CloudFront frontend hosting here anymore (removed in FEAT-004):
+    //   Amplify serves the SPA, and dropping CloudFront also removes the
+    //   distribution-wide 403/404 -> index.html rewrite that used to clobber
+    //   the API's 4xx JSON responses. The Amplify build injects the runtime
+    //   config (API_BASE / COGNITO_DOMAIN / COGNITO_CLIENT_ID) into
+    //   frontend/config.js from Amplify environment variables set to the
+    //   CfnOutputs below (API_BASE = ApiEndpoint + '/api').
     // ---------------------------------------------------------------
-    const siteBucket = new s3.Bucket(this, 'SiteBucket', {
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      enforceSSL: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-    });
-
-    // The HTTP API origin. `httpApi.apiEndpoint` is
-    // `https://<id>.execute-api.<region>.amazonaws.com`; CloudFront needs
-    // just the host, so strip the scheme.
-    const apiDomain = cdk.Fn.select(2, cdk.Fn.split('/', httpApi.apiEndpoint));
-    const apiOrigin = new origins.HttpOrigin(apiDomain, {
-      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-    });
-
-    const distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
-      comment: 'Quiz app static site',
-      defaultRootObject: 'index.html',
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-      defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-      },
-      additionalBehaviors: {
-        // Forward `/api/*` to the HTTP API so the SPA can call the API
-        // same-origin (window.API_BASE = '/api'). No caching, and forward
-        // the query string / needed headers so GET and POST both work.
-        'api/*': {
-          origin: apiOrigin,
-          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-          // Forward everything except the Host header (the origin needs
-          // its own execute-api host, not the CloudFront domain).
-          originRequestPolicy:
-            cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-        },
-      },
-      // SPA routing: send 403/404 back to index.html with a 200 so client
-      // side routing works. NOTE: CloudFront custom error responses are
-      // distribution-wide and cannot be scoped to a single behavior, so a
-      // 4xx from the API would also be rewritten to index.html/200. The
-      // SPA's fetch helper guards against this by verifying the response is
-      // JSON (see frontend/app.js), turning a swallowed HTML body into a
-      // clear error instead of a JSON parse crash.
-      errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(5),
-        },
-      ],
-    });
-
-    new s3deploy.BucketDeployment(this, 'DeploySite', {
-      sources: [s3deploy.Source.asset(path.join(__dirname, '..', 'frontend'))],
-      destinationBucket: siteBucket,
-      distribution,
-      distributionPaths: ['/*'],
-    });
 
     // ---------------------------------------------------------------
     // (e) Outputs.
@@ -303,11 +262,7 @@ export class QuizAppStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiEndpoint', {
       value: httpApi.apiEndpoint,
       description:
-        'Base URL of the quiz HTTP API (routes are under /api, e.g. /api/quizzes). The SPA reaches these same-origin via CloudFront /api/*.',
-    });
-    new cdk.CfnOutput(this, 'CloudFrontDomain', {
-      value: `https://${distribution.distributionDomainName}`,
-      description: 'CloudFront domain serving the quiz SPA',
+        'Base URL of the quiz HTTP API (routes are under /api, e.g. /api/quizzes). The Amplify-hosted SPA calls these cross-origin; set the Amplify env var API_BASE to this value + "/api".',
     });
     new cdk.CfnOutput(this, 'TableName', {
       value: table.tableName,

@@ -1,7 +1,9 @@
 'use strict';
 
 // API のベース URL。config.js の window.API_BASE を使い、末尾スラッシュは除去。
-// 未設定（空文字）の場合は、CloudFront 経由の同一オリジン `/api` を既定とする。
+// 本番では Amplify のビルドが API エンドポイント + '/api' のフル URL を注入する
+// （クロスオリジン呼び出し）。未設定（空文字）の場合は、同一オリジン `/api` を
+// 既定とする（ローカルで API と同じオリジンから配信する場合のフォールバック）。
 var API_BASE = (typeof window.API_BASE === 'string' && window.API_BASE !== ''
   ? window.API_BASE
   : '/api'
@@ -40,10 +42,10 @@ async function fetchJson(path, options) {
   if (!res.ok) {
     throw new Error('リクエストに失敗しました (' + res.status + ')');
   }
-  // CloudFront のカスタムエラーレスポンス（403/404 -> index.html, 200）は
-  // ディストリビューション全体に適用されるため、API 呼び出しが誤って
-  // HTML(200) を返す可能性がある。content-type を確認し、JSON でなければ
-  // 分かりやすいエラーにする（res.json() の解析失敗を避ける）。
+  // 防御的チェック: API はクロスオリジンの Amplify Hosting から呼び出される。
+  // API_BASE の設定ミスやプロキシ/リダイレクトの介在などで、JSON 以外
+  // （HTML など）が返ってくる可能性に備える。content-type を確認し、JSON で
+  // なければ分かりやすいエラーにする（res.json() の解析失敗を避ける）。
   var contentType = res.headers.get('content-type') || '';
   if (contentType.indexOf('application/json') === -1) {
     throw new Error(
