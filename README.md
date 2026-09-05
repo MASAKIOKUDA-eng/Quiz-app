@@ -131,6 +131,51 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
 
 ---
 
+## スペシャル問題セット「JAWS SONIC 2026」
+
+AWS コミュニティイベント向けのスペシャル問題として、**「JAWS SONIC 2026 スペシャル問題」**
+（全 20 問・日本語）を同梱しています。内容は JAWS-UG（Japan AWS User Group）コミュニティの
+一般知識と、AWS のアーキテクチャ設計・サーバーレス・コスト最適化に関する技術問題を
+ミックスした構成です。各問は 4 択で、正解は 1 つだけです。
+
+- **登録方法は「管理画面登録」です（シードではありません）**。この問題セットは
+  デフォルト問題（`lambda/seed-data.ts`）には含めていません。運用者が**管理者ページから
+  登録**して利用します。バックエンドの変更は不要です。
+- 登録用のデータ一式は **[`docs/jaws-sonic-2026.json`](docs/jaws-sonic-2026.json)** に
+  用意しています。この JSON は `POST /api/admin/quizzes` が受け付けるボディ形状
+  （`title` / `questions[]` / 任意の `quizId`）に**そのまま適合**しており、`quizId` は
+  `jaws-sonic-2026` を設定済みです。
+
+### 登録手順（管理者ページ）
+
+1. Amplify のドメインで `/admin.html` を開き、「ログイン」から Cognito Hosted UI で
+   管理者としてログインします（管理者ユーザーの作成は「デプロイ後のセットアップ手順」を参照）。
+2. 「新規作成」でフォームを開き、`docs/jaws-sonic-2026.json` を**内容の参照元**として
+   タイトル・各問（4 択・正解 1 つ）を入力します。管理フォームは 1 問あたり 2〜4 個の
+   選択肢に対応しており、本セットは全問 4 択です。
+3. 送信すると `POST /api/admin/quizzes` に `Authorization: Bearer <id_token>` 付きで
+   登録され、DynamoDB に保存されます。以後はトップページの一覧に表示され、他のクイズと
+   同様に受験できます。
+
+### （任意）Cognito トークンを使って直接登録する
+
+`docs/jaws-sonic-2026.json` は API のリクエストボディと同一形状のため、Cognito の
+ID トークンを持つ運用者は、フォームを使わずに直接 POST しても登録できます。
+`<ApiEndpoint>` はデプロイ時の CfnOutput、`<idToken>` は管理者ログインで得た Cognito の
+ID トークンです。
+
+```bash
+curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
+  -H "Authorization: Bearer <idToken>" \
+  -H "Content-Type: application/json" \
+  --data @docs/jaws-sonic-2026.json
+```
+
+> `quizId` は JSON に含まれる `jaws-sonic-2026`（`^[a-z0-9-]+$` に適合）がそのまま使われます。
+> 未認証・権限不足の場合は 401/403 で拒否されます。
+
+---
+
 ## クイズ履歴とグラフ（クライアント側・ログイン不要）
 
 クイズに回答して採点結果が表示されると、その結果が**閲覧中のブラウザの localStorage**
