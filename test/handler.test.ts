@@ -1,4 +1,5 @@
 import { scoreAnswers, ScoredQuestion, toPublicQuestions } from '../lambda/index';
+import { SAMPLE_QUIZZES } from '../lambda/seed-data';
 
 /**
  * Unit tests for the REAL exported scoring helper from the Lambda source.
@@ -120,5 +121,45 @@ describe('toPublicQuestions (answer stripping)', () => {
 
   test('returns an empty array for an empty quiz', () => {
     expect(toPublicQuestions([])).toEqual([]);
+  });
+});
+
+/**
+ * Validates the shipped seed data (SAMPLE_QUIZZES) so that a malformed quiz,
+ * an out-of-range answerIndex, a non-URL-safe quizId, or a shrunk primary
+ * quiz would fail the build. These tests run without AWS.
+ */
+describe('SAMPLE_QUIZZES seed data validity', () => {
+  test('at least one quiz has 10 or more questions', () => {
+    const maxQuestions = Math.max(...SAMPLE_QUIZZES.map((q) => q.questions.length));
+    expect(maxQuestions).toBeGreaterThanOrEqual(10);
+  });
+
+  test('every question has valid text/options/answerIndex', () => {
+    for (const quiz of SAMPLE_QUIZZES) {
+      for (const question of quiz.questions) {
+        expect(typeof question.text).toBe('string');
+        expect(question.text.length).toBeGreaterThan(0);
+        expect(Array.isArray(question.options)).toBe(true);
+        expect(question.options.length).toBeGreaterThanOrEqual(2);
+        for (const option of question.options) {
+          expect(typeof option).toBe('string');
+          expect(option.length).toBeGreaterThan(0);
+        }
+        expect(Number.isInteger(question.answerIndex)).toBe(true);
+        expect(question.answerIndex).toBeGreaterThanOrEqual(0);
+        expect(question.answerIndex).toBeLessThan(question.options.length);
+        // Each question carries exactly the SeedQuestion fields.
+        expect(Object.keys(question).sort()).toEqual(['answerIndex', 'options', 'text']);
+      }
+    }
+  });
+
+  test('all quizIds are unique and URL-safe', () => {
+    const quizIds = SAMPLE_QUIZZES.map((q) => q.quizId);
+    expect(new Set(quizIds).size).toBe(quizIds.length);
+    for (const quizId of quizIds) {
+      expect(quizId).toMatch(/^[a-z0-9-]+$/);
+    }
   });
 });
