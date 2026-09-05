@@ -3,6 +3,7 @@ import {
   ScoredQuestion,
   toPublicQuestions,
   validateAndNormalizeQuizInput,
+  validateAndNormalizeQuizUpdate,
 } from '../lambda/index';
 import { SAMPLE_QUIZZES } from '../lambda/seed-data';
 
@@ -251,6 +252,111 @@ describe('validateAndNormalizeQuizInput', () => {
       expect(result.quiz.quizId).toMatch(/^[a-z0-9-]+$/);
       expect(result.quiz.quizId.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * Tests for the REAL exported `validateAndNormalizeQuizUpdate` helper used by
+ * the authenticated admin EDIT route (PUT /api/admin/quizzes/{quizId}). Like
+ * the create validator it is pure (no AWS calls), but the quizId comes from
+ * the request PATH: it is set from the argument, never read from the body and
+ * never auto-generated.
+ */
+describe('validateAndNormalizeQuizUpdate', () => {
+  const validBody = {
+    title: '  Edited Quiz  ',
+    questions: [
+      { text: 'Q1', options: ['a', 'b', 'c'], answerIndex: 2 },
+      { text: 'Q2', options: ['x', 'y'], answerIndex: 0 },
+    ],
+  };
+
+  test('normalizes valid input and sets quizId from the path argument', () => {
+    const result = validateAndNormalizeQuizUpdate(validBody, 'path-id');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.quiz.quizId).toBe('path-id');
+      expect(result.quiz.title).toBe('Edited Quiz');
+      expect(result.quiz.questions).toHaveLength(2);
+      expect(result.quiz.questions[0]).toEqual({
+        text: 'Q1',
+        options: ['a', 'b', 'c'],
+        answerIndex: 2,
+      });
+    }
+  });
+
+  test('a body-supplied quizId does NOT override the path quizId', () => {
+    const result = validateAndNormalizeQuizUpdate(
+      { ...validBody, quizId: 'body-id' },
+      'path-id',
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.quiz.quizId).toBe('path-id');
+    }
+  });
+
+  test('rejects a non-object body', () => {
+    expect(validateAndNormalizeQuizUpdate(null, 'p').ok).toBe(false);
+    expect(validateAndNormalizeQuizUpdate('nope', 'p').ok).toBe(false);
+    expect(validateAndNormalizeQuizUpdate(42, 'p').ok).toBe(false);
+  });
+
+  test('rejects missing or empty title', () => {
+    expect(
+      validateAndNormalizeQuizUpdate({ questions: validBody.questions }, 'p').ok,
+    ).toBe(false);
+    expect(
+      validateAndNormalizeQuizUpdate(
+        { title: '   ', questions: validBody.questions },
+        'p',
+      ).ok,
+    ).toBe(false);
+  });
+
+  test('rejects an empty or missing questions array', () => {
+    expect(
+      validateAndNormalizeQuizUpdate({ title: 'T', questions: [] }, 'p').ok,
+    ).toBe(false);
+    expect(validateAndNormalizeQuizUpdate({ title: 'T' }, 'p').ok).toBe(false);
+  });
+
+  test('rejects a question with fewer than 2 options', () => {
+    const result = validateAndNormalizeQuizUpdate(
+      { title: 'T', questions: [{ text: 'Q', options: ['only'], answerIndex: 0 }] },
+      'p',
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects a question with empty option strings', () => {
+    const result = validateAndNormalizeQuizUpdate(
+      { title: 'T', questions: [{ text: 'Q', options: ['a', '  '], answerIndex: 0 }] },
+      'p',
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test('rejects an out-of-range or non-integer answerIndex', () => {
+    expect(
+      validateAndNormalizeQuizUpdate(
+        { title: 'T', questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: 2 }] },
+        'p',
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateAndNormalizeQuizUpdate(
+        { title: 'T', questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: -1 }] },
+        'p',
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateAndNormalizeQuizUpdate(
+        { title: 'T', questions: [{ text: 'Q', options: ['a', 'b'], answerIndex: 1.5 }] },
+        'p',
+      ).ok,
+    ).toBe(false);
   });
 });
 

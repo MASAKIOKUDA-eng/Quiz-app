@@ -1,0 +1,23 @@
+{
+  "project_type": "Cost-minimized fully-serverless AWS quiz application. Backend = AWS CDK v2 (TypeScript): DynamoDB single-table (on-demand), one ARM64 NodejsFunction Lambda behind an API Gateway v2 HTTP API, Cognito User Pool + public app client + Hosted UI + HttpJwtAuthorizer. This task is the BACKEND portion only (branch feat/admin-edit-delete-cors).",
+  "language": "TypeScript (Node 22)",
+  "build_system": "npm scripts + AWS CDK. build=tsc, test=jest (ts-jest), synth=cdk synth. NodejsFunction bundles the Lambda with esbuild (local dependency, no Docker) at synth time.",
+  "test_framework": "jest with ts-jest. test/handler.test.ts imports the REAL exported pure functions from lambda/index.ts (scoreAnswers, toPublicQuestions, validateAndNormalizeQuizInput). test/quiz-app-stack.test.ts synthesizes the real stack (aws-cdk-lib/assertions Template + Match) and asserts route/CORS/auth/cost properties.",
+  "build_command": "npm run build (tsc). Full verify on networked host: env -u NODE_OPTIONS npm ci && env -u NODE_OPTIONS npm run build && env -u NODE_OPTIONS npm test && env -u NODE_OPTIONS npx cdk synth",
+  "test_command": "npm test (jest)",
+  "verification_instructions": "In this sandbox (INTEGRATIONS_ONLY) npm registry is 403, so npm ci / tsc / jest / cdk synth CANNOT run. Author correct-by-construction and verify by reading. The user runs on their networked EC2 host: `npm ci && npm run build && npm test && npx cdk synth` (they may need `env -u NODE_OPTIONS` prefix only if a broken NODE_OPTIONS leaks in). Redeploy backend with `npx cdk deploy`.",
+  "snapshot_or_generated_files": "None checked in. Lambda is bundled by esbuild at synth/deploy time; no committed build artifacts.",
+  "setup_instructions": "npm ci at repo root (Quiz-app/). @aws-sdk/client-dynamodb and @aws-sdk/lib-dynamodb are devDeps (Lambda uses them; runtime provides @aws-sdk/* which is marked esbuild-external in the stack bundling config).",
+  "environment_constraints": "INTEGRATIONS_ONLY network: no npm install, no tsc/jest/cdk run in sandbox. All verification is read-based here. Do NOT push, do NOT open a PR (orchestrator publishes). Do NOT touch frontend/, amplify.yml, or generate a lockfile.",
+  "contribution_requirements": "Preserve cost-minimal fully-serverless posture: no new idle-cost resources, no VPC/NAT, DynamoDB stays on-demand. New work is just new routes on the existing Lambda + existing authorizer. Keep single-table key shapes identical: pk=QUIZ#<quizId>, sk=META and sk=Q#<n>. Keep error-shape conventions json(status,{message}) with 400/404/409/201 styles.",
+  "key_patterns": "lambda/index.ts dispatches on event.routeKey. Pure exported helpers are unit-tested directly. Shared writers buildQuizItems/writeQuizItems/getQuizItems use BatchWrite<=25 with UnprocessedItems bounded-retry. json() helper sets access-control-allow-origin. Admin routes read Cognito claims from event.requestContext.authorizer.jwt.claims for an audit log. Stack uses CfnParameter (adminAppBaseUrl) and CDK context (cognitoDomainPrefix, includeLocalhostCallback) for per-deploy overrides.",
+  "relevant_files": [
+    "lambda/index.ts (add 3 authorized routes GET/PUT/DELETE for /api/admin/quizzes/{quizId}; add shared delete helper; coherent CORS response header)",
+    "lib/quiz-app-stack.ts (add 3 routes bound to adminJwtAuthorizer; add PUT+DELETE to allowMethods; parameterize allowedOrigin defaulting to the Amplify domain)",
+    "test/handler.test.ts (extend for new/changed pure helpers)",
+    "test/quiz-app-stack.test.ts (assert new routes exist + JWT-bound, public routes stay open, CORS allowOrigins is the specific Amplify domain not '*', allowMethods include PUT/DELETE)",
+    "README.md (Japanese: document 3 new admin routes, full-replace edit semantics, tightened CORS + per-deploy override)",
+    "lambda/seed-data.ts (reference only; do NOT reduce any quiz below 10 questions)"
+  ],
+  "directory_structure": "Quiz-app/ root: bin/ (CDK app entry), lib/quiz-app-stack.ts (the stack), lambda/ (index.ts handler + seed-data.ts), test/ (handler.test.ts + quiz-app-stack.test.ts), frontend/ (SPA - OUT OF SCOPE), README.md (Japanese docs), package.json, cdk.json, jest.config.js, amplify.yml (OUT OF SCOPE)."
+}

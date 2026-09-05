@@ -43,14 +43,18 @@ describe('QuizAppStack', () => {
     });
   });
 
-  test('defines the four expected routes', () => {
+  test('defines the seven expected routes', () => {
     const routeKeys = [
       'GET /api/quizzes',
       'GET /api/quizzes/{quizId}',
       'POST /api/quizzes/{quizId}/submit',
       'POST /api/admin/quizzes',
+      'GET /api/admin/quizzes/{quizId}',
+      'PUT /api/admin/quizzes/{quizId}',
+      'DELETE /api/admin/quizzes/{quizId}',
     ];
-    // There should be exactly four routes wired up (3 public + 1 admin).
+    // There should be exactly seven routes wired up (3 public + POST admin
+    // create + GET/PUT/DELETE admin single-quiz).
     template.resourceCountIs('AWS::ApiGatewayV2::Route', routeKeys.length);
     for (const routeKey of routeKeys) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
@@ -86,12 +90,20 @@ describe('QuizAppStack', () => {
     });
   });
 
-  test('admin route is protected by the JWT authorizer', () => {
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
-      RouteKey: 'POST /api/admin/quizzes',
-      AuthorizationType: 'JWT',
-      AuthorizerId: Match.anyValue(),
-    });
+  test('admin routes are protected by the JWT authorizer', () => {
+    const adminRouteKeys = [
+      'POST /api/admin/quizzes',
+      'GET /api/admin/quizzes/{quizId}',
+      'PUT /api/admin/quizzes/{quizId}',
+      'DELETE /api/admin/quizzes/{quizId}',
+    ];
+    for (const routeKey of adminRouteKeys) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: routeKey,
+        AuthorizationType: 'JWT',
+        AuthorizerId: Match.anyValue(),
+      });
+    }
   });
 
   test('public routes have no authorizer', () => {
@@ -121,15 +133,42 @@ describe('QuizAppStack', () => {
     template.resourceCountIs('AWS::S3::Bucket', 0);
   });
 
-  test('HTTP API CORS allows cross-origin calls including the authorization header', () => {
-    // The Amplify-hosted SPA calls the API cross-origin. The admin route
-    // sends `Authorization: Bearer <jwt>`, so the CORS preflight must allow
-    // the 'authorization' header (alongside 'content-type').
+  test('HTTP API CORS is scoped to the Amplify origin and allows edit/delete methods', () => {
+    // The Amplify-hosted SPA calls the API cross-origin. The admin routes
+    // send `Authorization: Bearer <jwt>`, so the CORS preflight must allow
+    // the 'authorization' header (alongside 'content-type'). AllowOrigins is
+    // tightened to the specific Amplify domain (NOT '*'), and PUT/DELETE are
+    // allowed for the admin edit/delete routes.
     template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
       ProtocolType: 'HTTP',
       CorsConfiguration: Match.objectLike({
         AllowHeaders: Match.arrayWith(['authorization']),
-        AllowMethods: Match.arrayWith(['GET', 'POST', 'OPTIONS']),
+        AllowOrigins: ['https://main.d2uwsqpk41y7so.amplifyapp.com'],
+        AllowMethods: Match.arrayWith([
+          'GET',
+          'POST',
+          'PUT',
+          'DELETE',
+          'OPTIONS',
+        ]),
+      }),
+    });
+  });
+
+  test('CORS AllowOrigins does NOT contain a wildcard', () => {
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: Match.objectLike({
+        AllowOrigins: Match.not(Match.arrayWith(['*'])),
+      }),
+    });
+  });
+
+  test('the Lambda receives the ALLOWED_ORIGIN env var matching the CORS origin', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({
+          ALLOWED_ORIGIN: 'https://main.d2uwsqpk41y7so.amplifyapp.com',
+        }),
       }),
     });
   });

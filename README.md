@@ -40,7 +40,10 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
    │   ├── GET  /api/quizzes                    （公開）
    │   ├── GET  /api/quizzes/{quizId}           （公開・正解は除外）
    │   ├── POST /api/quizzes/{quizId}/submit    （公開・サーバー採点）
-   │   └── POST /api/admin/quizzes              （管理者のみ / JWT オーソライザー）
+   │   ├── POST   /api/admin/quizzes            （管理者のみ / JWT オーソライザー）
+   │   ├── GET    /api/admin/quizzes/{quizId}   （管理者のみ / JWT・正解 answerIndex を含む＝編集フォーム用）
+   │   ├── PUT    /api/admin/quizzes/{quizId}   （管理者のみ / JWT・全置換で更新）
+   │   └── DELETE /api/admin/quizzes/{quizId}   （管理者のみ / JWT・削除）
    │                                                    ▲
    │                                                    │ Authorization: Bearer <id_token>
    ▼                                          [Amazon Cognito User Pool + Hosted UI]
@@ -56,14 +59,32 @@ AWS 上でフルサーバーレスに動作する、クイズ出題アプリケ�
   Amplify は **Hosting のみ**利用し、Amplify バックエンド（Gen2 等）は使いません。
 - **クロスオリジン API 呼び出し（CORS）**: SPA は Amplify のドメインから配信され、API とは
   別オリジンになります。そのため HTTP API 側で CORS を有効化しています。
-  - `allowMethods`: `GET` / `POST` / `OPTIONS`
+  - `allowMethods`: `GET` / `POST` / `PUT` / `DELETE` / `OPTIONS`（管理者の編集 `PUT`・削除 `DELETE`
+    ルートに対応するため `PUT` / `DELETE` を追加）
   - `allowHeaders`: `content-type` と `authorization`（管理者 API が Authorization ヘッダを送るため）
-  - `allowOrigins`: 本デモでは `*`。**本番では実際の Amplify ドメインに絞る**ことを推奨します
-    （後述）。CORS はブラウザ側の制御であり、管理者 API は別途 Cognito JWT オーソライザーで保護されます。
+  - `allowOrigins`: 既定で Amplify ドメイン `https://main.d2uwsqpk41y7so.amplifyapp.com` に限定しています
+    （以前の `*` から変更）。デプロイごとに `allowedOrigin` の CDK コンテキストで上書きでき、
+    たとえば `npx cdk deploy -c allowedOrigin=https://your-domain.example` のように指定します。
+    さらに Lambda の応答ヘッダ `access-control-allow-origin` も同じオリジン（`ALLOWED_ORIGIN`
+    環境変数）に設定されるため、プリフライトと実レスポンスの両方が一致し、CORS はエンドツーエンドで
+    絞られます。CORS はブラウザ側の制御であり、管理者 API は別途 Cognito JWT オーソライザーで保護されます。
 - **API**: API Gateway HTTP API (v2)。REST API より安価。ルートは `/api` プレフィックス配下です。
 - **管理者認証**: Amazon Cognito User Pool + Hosted UI。パブリックなアプリクライアント（クライアント
   シークレットなし）を使い、`POST /api/admin/quizzes` を JWT オーソライザーで保護します。
   セルフサインアップは無効で、管理者ユーザーは運用者が CLI/コンソールで作成します（後述）。
+- **管理者の編集・削除 API**: 登録済みクイズの編集・削除は次の 3 ルートで行います。いずれも既存の
+  `POST /api/admin/quizzes` と**同じ Cognito JWT オーソライザー**で保護され、公開ルート
+  （`GET /api/quizzes`・`GET /api/quizzes/{quizId}`・`POST /api/quizzes/{quizId}/submit`）は変更ありません。
+  - `PUT /api/admin/quizzes/{quizId}`（**編集は全置換方式**）: 既存の `Q#n` 項目をすべて削除してから
+    `META` と新しい `Q#n` を書き込みます（`questionCount` を正しく保つため）。`quizId` はパスから取得し
+    **新規採番はしません**（ボディの `quizId` は無視）。指定した `quizId` が存在しない場合は **404** を返します。
+    なお全置換は「削除 → 書き込み」の 2 段階で行われ、トランザクションではありません（低頻度・
+    運用者のみの管理操作という前提での意図的なトレードオフです）。万一その間で失敗した場合は
+    同じ `PUT` を再実行すれば復旧します。
+  - `DELETE /api/admin/quizzes/{quizId}`（**削除**）: 対象の `META` と全 `Q#n` を削除します。存在しない
+    場合は **404** を返します。
+  - `GET /api/admin/quizzes/{quizId}`（**管理者用の読み取り**）: 公開用 `GET` と異なり、各問の正解
+    `answerIndex` を**含めて**返します（編集フォームの正解プリフィル用）。存在しない場合は **404** を返します。
 - **バックエンド**: 単一の Lambda 関数（Node.js 22, ARM64）。VPC / NAT は使いません。
 - **データストア**: DynamoDB シングルテーブル、オンデマンド課金。
 
@@ -163,10 +184,15 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
    > URL（origin + `/admin.html`）は、CDK が Cognito に登録済みのコールバック/ログアウト
    > URL と**完全一致**します。**CDK の変更も Amplify の SPA 書き換えルールも不要**です。
 
-5. **（任意・推奨）CORS の許可オリジンを絞る。**
-   `lib/quiz-app-stack.ts` の `corsPreflight.allowOrigins` を実際の Amplify ドメイン
-   （例: `['https://main.<appId>.amplifyapp.com']`）に絞って再デプロイします。
-   本デモの既定は `*` ですが、本番では絞ることを推奨します。
+5. **（任意）CORS の許可オリジンを変更する。**
+   CORS の `allowOrigins` は既定で Amplify ドメイン `https://main.d2uwsqpk41y7so.amplifyapp.com`
+   に限定済みです。別のドメイン（独自ドメイン等）に変更したい場合のみ、`allowedOrigin` の CDK
+   コンテキストで上書きして再デプロイします。
+   ```bash
+   npx cdk deploy -c allowedOrigin=https://your-domain.example
+   ```
+   この値は CORS プリフライトの `allowOrigins` と Lambda の `access-control-allow-origin`
+   応答ヘッダ（`ALLOWED_ORIGIN` 環境変数）の両方に反映されます。
 
 > **補足:** 手順 4 を省くと Cognito のコールバック URL に Amplify ドメインが含まれず、
 > ログイン後のリダイレクトが失敗します。開発中は `includeLocalhostCallback` の既定
@@ -283,9 +309,12 @@ npx cdk deploy \
 これにより `https://main.<appId>.amplifyapp.com/admin.html` が Hosted UI の
 `redirect_uri` / `logout_uri` として許可されます（コンソールから手動で更新しても可）。
 
-> **セキュリティ推奨**: API の CORS `allowOrigins` は本デモでは `*` ですが、本番では
-> `lib/quiz-app-stack.ts` の `corsPreflight.allowOrigins` を実際の Amplify ドメイン
-> （例: `['https://main.<appId>.amplifyapp.com']`）に絞って再デプロイしてください。
+> **CORS について**: API の CORS `allowOrigins` は既定で Amplify ドメイン
+> `https://main.d2uwsqpk41y7so.amplifyapp.com` に限定済みです（以前の `*` から変更）。別の
+> ドメインに合わせる場合は `npx cdk deploy -c allowedOrigin=https://your-domain.example` の
+> ように `allowedOrigin` コンテキストで上書きして再デプロイしてください。この値は Lambda の
+> `access-control-allow-origin` 応答ヘッダ（`ALLOWED_ORIGIN` 環境変数）にも反映され、
+> CORS はエンドツーエンドで絞られます。
 
 ---
 
@@ -401,11 +430,12 @@ env -u NODE_OPTIONS npm run build   # tsc 型チェック + Vite バンドル。
 
 - `test/quiz-app-stack.test.ts` — `aws-cdk-lib/assertions` の `Template` を使い、
   スタックをメモリ内で合成して次を検証します: DynamoDB がオンデマンド課金であること、
-  Lambda が ARM64 + Node ランタイムであること、HTTP API であること、4 つのルート
-  （公開 3 + 管理者 1）が存在すること、管理者ルートが JWT オーソライザーで保護され公開ルートは
-  未保護であること、Cognito User Pool（セルフサインアップ無効）とパブリックアプリクライアントが
-  あること、**CloudFront / S3 のフロント配信リソースが存在しないこと**、そして **HTTP API の CORS が
-  `authorization` ヘッダを許可していること**。
+  Lambda が ARM64 + Node ランタイムであること、HTTP API であること、7 つのルート
+  （公開 3 + 管理者 4: `POST` / `GET` / `PUT` / `DELETE`）が存在すること、管理者ルートが
+  すべて JWT オーソライザーで保護され公開ルートは未保護であること、Cognito User Pool
+  （セルフサインアップ無効）とパブリックアプリクライアントがあること、**CloudFront / S3 の
+  フロント配信リソースが存在しないこと**、そして **HTTP API の CORS が `authorization` ヘッダを
+  許可していること**。
 - `test/handler.test.ts` — Lambda ソースから **実際にエクスポートされている純粋関数**
   （`scoreAnswers` など）を import して検証します。実運用コードをそのまま呼ぶため、
   ロジックが壊れればテストは失敗します。
@@ -414,6 +444,6 @@ env -u NODE_OPTIONS npm run build   # tsc 型チェック + Vite バンドル。
 
 ## 今後の拡張候補 (Optional follow-ups)
 
-- **CORS を実ドメインに限定**: `allowOrigins` を Amplify ドメインに絞る。
-- **カスタムドメイン**: Amplify のカスタムドメイン + Route 53 で独自ドメイン + HTTPS を構成する。
+- **カスタムドメイン**: Amplify のカスタムドメイン + Route 53 で独自ドメイン + HTTPS を構成する
+  （その際は `allowedOrigin` コンテキストで CORS 許可オリジンを新ドメインに合わせて再デプロイ）。
 - **CI/CD**: GitHub Actions などで `npm test` と `cdk deploy` を自動化する（フロントは Amplify が自動ビルド）。
