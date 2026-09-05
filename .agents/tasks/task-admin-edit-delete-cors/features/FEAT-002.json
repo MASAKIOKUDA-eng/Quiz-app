@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-002",
+  "type": "docs",
+  "description": "Update the Japanese README.md to document the three new JWT-authorized admin routes (GET/PUT/DELETE /api/admin/quizzes/{quizId}), the full-replace edit semantics, and the tightened CORS (allowOrigins now the specific Amplify domain, PUT/DELETE added to allowMethods) including how to override the allowed origin per-deploy. Depends on FEAT-001 having defined the exact routes/behavior.",
+  "status": "completed",
+  "steps": [
+    "README.md: In the ASCII route list around lines 40-46 (under 'API Gateway HTTP API (v2)'), add the three new admin routes beneath the existing 'POST /api/admin/quizzes' entry, marking them 管理者のみ / JWT オーソライザー: 'GET /api/admin/quizzes/{quizId}' (管理者用・正解 answerIndex を含めて返す = 編集フォーム用), 'PUT /api/admin/quizzes/{quizId}' (管理者のみ・全置換で更新), 'DELETE /api/admin/quizzes/{quizId}' (管理者のみ・削除). Keep the existing formatting style.",
+    "README.md: Add a short subsection describing the admin edit/delete behavior in Japanese: 編集は全置換方式 (既存の Q#n をすべて削除してから META + 新しい Q#n を書き込む; quizId はパスから取得し新規採番しない; 存在しない quizId は 404); 削除は META と全 Q#n を削除 (存在しない場合は 404); 管理者用 GET は公開用 GET と異なり answerIndex を含めて返す (編集フォームの正解プリフィル用)。これら3ルートは既存の POST /api/admin/quizzes と同じ Cognito JWT オーソライザーで保護され、公開ルートは変更なし。",
+    "README.md: Update the CORS bullets around lines 57-63. Change allowMethods to list GET / POST / PUT / DELETE / OPTIONS. Change the allowOrigins description: no longer '*'; it is now limited to the Amplify domain https://main.d2uwsqpk41y7so.amplifyapp.com by default, and is configurable per-deploy via the `allowedOrigin` override (document the exact command, matching what FEAT-001 implemented, e.g. `npx cdk deploy -c allowedOrigin=https://your-domain.example`). Mention that the Lambda response header access-control-allow-origin is set to the same configured origin (via the ALLOWED_ORIGIN env var) so CORS is tightened end-to-end.",
+    "README.md: If there is a later section that previously said to tighten allowOrigins '後述' / 'once known', update or remove that now-stale note so the doc is internally consistent (CORS is now tightened by default)."
+  ],
+  "acceptance_criteria": [
+    "README documents all three new admin routes with their auth (JWT) and semantics (full-replace edit, delete, answerIndex-inclusive admin read).",
+    "README CORS section lists GET/POST/PUT/DELETE/OPTIONS and states allowOrigins is the specific Amplify domain by default, configurable via the allowedOrigin override with the exact command shown.",
+    "README mentions the Lambda response header is tightened to the same origin via ALLOWED_ORIGIN, and any prior 'tighten later' note is reconciled.",
+    "Documentation remains in Japanese, consistent with the existing README style; no em dashes used."
+  ],
+  "verification": [
+    "Read-based: confirm README route list and CORS section match exactly what FEAT-001 implemented (route paths/methods, default origin literal, override command, env var name)."
+  ],
+  "blocked_reason": null,
+  "findings": "Docs-only change; no build/test run (INTEGRATIONS_ONLY sandbox). Verified README against FEAT-001 source: routes in lib/quiz-app-stack.ts (POST/GET/PUT/DELETE /api/admin/quizzes[/{quizId}]), default allowedOrigin literal 'https://main.d2uwsqpk41y7so.amplifyapp.com', override command 'npx cdk deploy -c allowedOrigin=...', ALLOWED_ORIGIN env var and access-control-allow-origin header in lambda/index.ts, and allowMethods GET/POST/PUT/DELETE/OPTIONS. Also reconciled the stale test-description route count (now 7 routes = public 3 + admin 4) and removed the now-obsolete 'tighten CORS later' follow-up bullet."
+}
