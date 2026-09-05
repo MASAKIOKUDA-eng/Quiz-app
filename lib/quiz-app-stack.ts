@@ -172,14 +172,35 @@ export class QuizAppStack extends cdk.Stack {
     });
 
     // Callback/logout URLs: the admin page is served at `/admin.html`.
-    const callbackUrls = [
-      `${adminAppBaseUrl.valueAsString}/admin.html`,
-      'http://localhost:8080/admin.html',
-    ];
-    const logoutUrls = [
-      `${adminAppBaseUrl.valueAsString}/admin.html`,
-      'http://localhost:8080/admin.html',
-    ];
+    //
+    // The primary entry is derived from the `adminAppBaseUrl` parameter (the
+    // Amplify domain in production). We ALSO trust `http://localhost:8080/admin.html`
+    // by default so a developer can run the SPA locally against the Hosted UI.
+    // That localhost entry must NOT be trusted by a production pool, but
+    // `adminAppBaseUrl` is a CfnParameter whose value is a synth-time token
+    // (`.valueAsString`), so we cannot string-compare it to decide. Instead we
+    // gate the localhost entry behind a plain synth-time CDK context flag,
+    // `includeLocalhostCallback`, which defaults to true for developer
+    // convenience. For production deploys, operators pass
+    // `-c includeLocalhostCallback=false` so the pool does not trust a
+    // localhost redirect target.
+    //
+    // NOTE: values passed via `-c key=value` arrive as the STRING "false",
+    // which is truthy in JS, so we explicitly treat "false"/false as false
+    // (any other value, including the unset default, keeps localhost enabled).
+    const includeLocalhostCallbackCtx = this.node.tryGetContext(
+      'includeLocalhostCallback',
+    );
+    const includeLocalhostCallback =
+      includeLocalhostCallbackCtx !== false &&
+      includeLocalhostCallbackCtx !== 'false';
+
+    const callbackUrls = [`${adminAppBaseUrl.valueAsString}/admin.html`];
+    const logoutUrls = [`${adminAppBaseUrl.valueAsString}/admin.html`];
+    if (includeLocalhostCallback) {
+      callbackUrls.push('http://localhost:8080/admin.html');
+      logoutUrls.push('http://localhost:8080/admin.html');
+    }
 
     const userPoolClient = userPool.addClient('AdminAppClient', {
       // Public browser client: NO client secret.

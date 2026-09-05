@@ -97,6 +97,73 @@ DynamoDB が空のとき、`lambda/seed-data.ts` の内容が自動投入され�
 
 ---
 
+## デプロイ後のセットアップ手順（順番厳守）
+
+新規に構築する運用者は、**必ず次の順番**で作業してください。順番を飛ばすと
+ログイン（Cognito のコールバック）や API 呼び出し（CORS）が**静かに壊れます**。
+各コマンドの詳細は後述の「デプロイ手順」節も参照してください。
+
+1. **CDK をデプロイして CfnOutput を控える。**
+   `npx cdk deploy` を実行し、出力される次の値を控えます。
+   - `ApiEndpoint` — HTTP API のベース URL
+   - `UserPoolId` — Cognito User Pool ID
+   - `UserPoolClientId` — Cognito アプリクライアント ID
+   - `UserPoolHostedUiDomain` — Cognito Hosted UI のベース URL
+
+2. **最初の管理者ユーザーを作成する。**
+   セルフサインアップは無効なので、運用者が CLI で作成します。
+   ```bash
+   aws cognito-idp admin-create-user \
+     --user-pool-id <UserPoolId> \
+     --username admin@example.com \
+     --user-attributes Name=email,Value=admin@example.com Name=email_verified,Value=true \
+     --message-action SUPPRESS
+
+   aws cognito-idp admin-set-user-password \
+     --user-pool-id <UserPoolId> \
+     --username admin@example.com \
+     --password 'ChangeMe!2024' \
+     --permanent
+   ```
+   `admin-set-user-password ... --permanent` を実行しないと `FORCE_CHANGE_PASSWORD`
+   状態のままで、Hosted UI から即ログインできません。
+
+3. **Amplify Hosting に Git リポジトリを接続する（Hosting のみ）。**
+   Amplify コンソールで「アプリケーションをホスト」を選び、リポジトリとブランチを
+   接続します（**Amplify バックエンドは作成しません**）。次の環境変数を設定します
+   （値は手順 1 の CfnOutput から）。
+   - `API_BASE` = `ApiEndpoint` + `/api`
+     （例: `https://xxxx.execute-api.<region>.amazonaws.com/api`）
+   - `COGNITO_DOMAIN` = `UserPoolHostedUiDomain`
+   - `COGNITO_CLIENT_ID` = `UserPoolClientId`
+   これらの環境変数名は `amplify.yml` が参照する名前と一致している必要があります。
+   デプロイ後、Amplify が払い出したドメイン（例: `https://main.<appId>.amplifyapp.com`）を控えます。
+
+4. **Amplify ドメインが判明したら CDK スタックを再デプロイする。**
+   `adminAppBaseUrl` パラメータに手順 3 の Amplify ドメインを渡して再デプロイし、
+   Cognito アプリクライアントのコールバック/ログアウト URL に実ドメインを反映します。
+   本番では `-c includeLocalhostCallback=false` も付けて、localhost へのリダイレクトを
+   信頼しないようにします。
+   ```bash
+   npx cdk deploy \
+     --parameters adminAppBaseUrl=https://main.<appId>.amplifyapp.com \
+     -c includeLocalhostCallback=false
+   ```
+   これで `https://main.<appId>.amplifyapp.com/admin.html` が Hosted UI の
+   `redirect_uri` / `logout_uri` として許可されます。
+
+5. **（任意・推奨）CORS の許可オリジンを絞る。**
+   `lib/quiz-app-stack.ts` の `corsPreflight.allowOrigins` を実際の Amplify ドメイン
+   （例: `['https://main.<appId>.amplifyapp.com']`）に絞って再デプロイします。
+   本デモの既定は `*` ですが、本番では絞ることを推奨します。
+
+> **補足:** 手順 4 を省くと Cognito のコールバック URL に Amplify ドメインが含まれず、
+> ログイン後のリダイレクトが失敗します。開発中は `includeLocalhostCallback` の既定
+> （`true`）により `http://localhost:8080/admin.html` が許可されますが、本番デプロイでは
+> `-c includeLocalhostCallback=false` を付けて localhost を除外してください。
+
+---
+
 ## 前提条件 (Prerequisites)
 
 - **Node.js 22** 以上 と npm
@@ -185,10 +252,15 @@ aws cognito-idp admin-set-user-password \
 
 Amplify のドメインが分かったら、そのドメインを Cognito アプリクライアントの
 コールバック/ログアウト URL に反映します。CDK の `adminAppBaseUrl` パラメータに
-Amplify ドメインを渡して再デプロイするのが簡単です。
+Amplify ドメインを渡して再デプロイするのが簡単です。本番では
+`-c includeLocalhostCallback=false` も付けて `http://localhost:8080/admin.html` を
+コールバック/ログアウト URL から除外してください（既定は `true` で、ローカル開発の
+利便性のため localhost を許可します）。
 
 ```bash
-npx cdk deploy --parameters adminAppBaseUrl=https://main.<appId>.amplifyapp.com
+npx cdk deploy \
+  --parameters adminAppBaseUrl=https://main.<appId>.amplifyapp.com \
+  -c includeLocalhostCallback=false
 ```
 
 これにより `https://main.<appId>.amplifyapp.com/admin.html` が Hosted UI の
