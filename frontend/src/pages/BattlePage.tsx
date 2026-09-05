@@ -11,6 +11,7 @@ import {
   clearToken,
   loginUrl,
   logoutUrl,
+  publicRedirectUri,
   restoreToken,
 } from '../auth';
 import {
@@ -405,13 +406,15 @@ function HostBattle({ onBack }: { onBack: () => void }) {
   }
 
   function handleLogin(): void {
-    window.location.assign(loginUrl());
+    // 公開アプリ（対戦ホスト）は Amplify が ROOT で配信するため、redirect_uri は
+    // origin + '/'（Cognito 登録済みの正準文字列、末尾スラッシュ付き）を渡す。
+    window.location.assign(loginUrl(publicRedirectUri()));
   }
 
   function handleLogout(): void {
     clearToken();
     setIdToken(null);
-    window.location.assign(logoutUrl());
+    window.location.assign(logoutUrl(publicRedirectUri()));
   }
 
   function createRoom(): void {

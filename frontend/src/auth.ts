@@ -20,15 +20,42 @@ export interface CaptureResult {
 }
 
 /**
- * このページ自身の URL（Hosted UI の redirect_uri / logout_uri に使う）。
+ * captureTokenFromHash() の history.replaceState 用にのみ使う、現在ページの URL。
  * クエリやハッシュを除いた origin + pathname。
+ *
+ * 注意: これはもはや OAuth の redirect_uri には使わない。redirect_uri は Cognito に
+ * 登録された正準な文字列（adminRedirectUri() / publicRedirectUri()）でなければならず、
+ * ブラウザが実際に着地したページに依らず byte-for-byte で一致する必要がある。
+ * ここでは「トークン取得後に現在の URL からフラグメントを取り除く」目的にのみ使う。
  */
 export function adminPageUrl(): string {
   return window.location.origin + window.location.pathname;
 }
 
-/** Cognito Hosted UI のログイン URL。 */
-export function loginUrl(): string {
+/**
+ * Cognito に登録された正準な redirect_uri を返すヘルパー。
+ *
+ * 重要: これらの文字列は lib/quiz-app-stack.ts の callbackUrls / logoutUrls に
+ * 登録された値と byte-for-byte（scheme, host, path, 末尾スラッシュ）で一致させること。
+ * Cognito は redirect_uri の完全一致を要求するため、少しでもズレると
+ * redirect_mismatch になる。
+ *
+ * - 管理画面は Amplify が `/admin.html` で配信する => origin + '/admin.html'。
+ * - 公開アプリ（リアルタイム対戦ホストを含む）は Amplify が ROOT で配信するため、
+ *   リダイレクト後にブラウザが着地するのは origin + '/'（末尾スラッシュ付き、
+ *   '/index.html' ではない）。したがってホストの redirect_uri は origin + '/'。
+ */
+export function adminRedirectUri(): string {
+  return window.location.origin + '/admin.html';
+}
+
+/** 公開アプリ（リアルタイム対戦ホスト）用の正準な redirect_uri（ROOT）。 */
+export function publicRedirectUri(): string {
+  return window.location.origin + '/';
+}
+
+/** Cognito Hosted UI のログイン URL。redirectUri は登録済みの正準文字列を渡すこと。 */
+export function loginUrl(redirectUri: string): string {
   return (
     COGNITO_DOMAIN +
     '/login?client_id=' +
@@ -36,18 +63,18 @@ export function loginUrl(): string {
     '&response_type=token' +
     '&scope=openid+email+profile' +
     '&redirect_uri=' +
-    encodeURIComponent(adminPageUrl())
+    encodeURIComponent(redirectUri)
   );
 }
 
-/** Cognito Hosted UI のログアウト URL。 */
-export function logoutUrl(): string {
+/** Cognito Hosted UI のログアウト URL。redirectUri は登録済みの正準文字列を渡すこと。 */
+export function logoutUrl(redirectUri: string): string {
   return (
     COGNITO_DOMAIN +
     '/logout?client_id=' +
     encodeURIComponent(COGNITO_CLIENT_ID) +
     '&logout_uri=' +
-    encodeURIComponent(adminPageUrl())
+    encodeURIComponent(redirectUri)
   );
 }
 

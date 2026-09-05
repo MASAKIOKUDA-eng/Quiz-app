@@ -163,8 +163,18 @@ export class QuizAppStack extends cdk.Stack {
     const adminAppBaseUrl = new cdk.CfnParameter(this, 'adminAppBaseUrl', {
       type: 'String',
       default: 'http://localhost:8080',
+      // MUST be an origin with NO trailing slash (e.g.
+      // `https://main.<appId>.amplifyapp.com`, NOT `.../`). The callback/
+      // logout URLs are built by concatenating this value with `/admin.html`
+      // and `/`, so a trailing slash would produce a doubled slash
+      // (`https://host//` and `https://host//admin.html`) that no longer
+      // matches the browser's redirect_uri and reintroduces
+      // redirect_mismatch. The regex below enforces this at deploy time.
+      allowedPattern: '^(https?://)[^\\s]*[^/\\s]$',
+      constraintDescription:
+        'adminAppBaseUrl must be an http(s) origin with NO trailing slash, e.g. https://main.<appId>.amplifyapp.com',
       description:
-        'Base URL of the admin SPA (Amplify Hosting domain in production). Used to build the Cognito Hosted UI callback/logout URLs. Update after connecting the repo to Amplify.',
+        'Base URL (origin) of the admin SPA (Amplify Hosting domain in production), WITHOUT a trailing slash. Used to build the Cognito Hosted UI callback/logout URLs (`<base>/admin.html` and `<base>/`). A trailing slash would break the exact redirect_uri match. Update after connecting the repo to Amplify.',
     });
 
     const userPool = new cognito.UserPool(this, 'AdminUserPool', {
@@ -222,25 +232,42 @@ export class QuizAppStack extends cdk.Stack {
       includeLocalhostCallbackCtx !== 'false';
 
     // The admin SPA lives at `/admin.html`. The realtime battle HOST view
-    // (FEAT-002) lives in the PUBLIC app at `/index.html`, but it reuses the
-    // SAME Cognito Hosted UI login, so the Hosted UI redirects the host back
-    // to `/index.html`. That URL must therefore ALSO be a trusted
-    // callback/logout URL on this app client, alongside the existing
-    // `/admin.html` entries (which are kept unchanged). Both follow the same
-    // `adminAppBaseUrl` + `includeLocalhostCallback` gating.
+    // lives in the PUBLIC app, which Amplify serves at the ROOT URL. After the
+    // Hosted UI login the browser lands on `origin + '/'` (with a trailing
+    // slash and NO `/index.html`), so the host's redirect_uri is the ROOT.
+    // We therefore register the canonical ROOT `${adminAppBaseUrl}/` as a
+    // trusted callback/logout URL, alongside the existing `/admin.html`
+    // entries (kept unchanged). An earlier `/index.html` entry never matched
+    // the browser's actual `/` redirect_uri and has been removed.
+    //
+    // IMPORTANT: these strings MUST match frontend/src/auth.ts
+    // adminRedirectUri() ('/admin.html') and publicRedirectUri() ('/')
+    // byte-for-byte (scheme, host, path, trailing slash). Cognito requires an
+    // EXACT redirect_uri match; any drift produces redirect_mismatch.
+    //
+    // NOTE on trailing slashes: `adminAppBaseUrl.valueAsString` is a
+    // synth-time CloudFormation TOKEN, not a real JS string, so a JS
+    // `.replace(/\/$/, '')` here would operate on the token placeholder and
+    // silently do nothing. Instead the footgun is closed at the source: the
+    // `adminAppBaseUrl` CfnParameter above carries an `allowedPattern` that
+    // rejects a trailing slash at deploy time, so `${base}/` cannot become
+    // `${base}//`. Given that guarantee, raw concatenation below is safe.
+    //
+    // Both follow the same `adminAppBaseUrl` + `includeLocalhostCallback`
+    // gating.
     const callbackUrls = [
       `${adminAppBaseUrl.valueAsString}/admin.html`,
-      `${adminAppBaseUrl.valueAsString}/index.html`,
+      `${adminAppBaseUrl.valueAsString}/`,
     ];
     const logoutUrls = [
       `${adminAppBaseUrl.valueAsString}/admin.html`,
-      `${adminAppBaseUrl.valueAsString}/index.html`,
+      `${adminAppBaseUrl.valueAsString}/`,
     ];
     if (includeLocalhostCallback) {
       callbackUrls.push('http://localhost:8080/admin.html');
-      callbackUrls.push('http://localhost:8080/index.html');
+      callbackUrls.push('http://localhost:8080/');
       logoutUrls.push('http://localhost:8080/admin.html');
-      logoutUrls.push('http://localhost:8080/index.html');
+      logoutUrls.push('http://localhost:8080/');
     }
 
     const userPoolClient = userPool.addClient('AdminAppClient', {

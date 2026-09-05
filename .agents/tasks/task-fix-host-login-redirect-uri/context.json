@@ -1,0 +1,25 @@
+{
+  "project_type": "Cost-minimized serverless AWS quiz app. AWS CDK v2 backend + React 18 / Vite 5 / TypeScript multi-page frontend.",
+  "language": "TypeScript",
+  "build_system": "npm + AWS CDK v2 (backend); npm + Vite 5 multi-page (frontend). Deps are EXACTLY react + react-dom; keep it that way, no lockfile changes.",
+  "test_framework": "Jest with ts-jest over synthesized CloudFormation template (test/quiz-app-stack.test.ts). Frontend has NO test runner.",
+  "build_command": "Backend: npx cdk synth. Frontend: cd frontend && npm install && npm run build.",
+  "test_command": "npm test (jest, backend only).",
+  "verification_instructions": "In sandbox (INTEGRATIONS_ONLY) npm registry is 403 so tsc/jest/cdk synth/vite build CANNOT run. Author correct-by-construction and verify by reading. Confirm the exact redirect_uri strings produced by auth.ts match byte-for-byte the callbackUrls/logoutUrls registered in lib/quiz-app-stack.ts (scheme, host, path, trailing slash). Document the user's real verification/deploy commands in README.",
+  "snapshot_or_generated_files": "None checked in.",
+  "setup_instructions": "Backend: npm install at repo root. Frontend: cd frontend && npm install.",
+  "environment_constraints": "INTEGRATIONS_ONLY network: npm install / tsc / jest / cdk synth / vite build cannot run in the sandbox (npm registry returns 403). No build/test verification possible here; rely on careful reading. Do NOT push or open a PR.",
+  "contribution_requirements": "Keep frontend deps exactly react + react-dom, no lockfile. Do NOT change JWT authorizer, WebSocket API, scoring, or anything unrelated. Strictly the OAuth redirect URL matching.",
+  "key_patterns": "auth.ts builds Hosted UI login/logout URLs; redirect_uri currently derived from adminPageUrl() = window.location.origin + window.location.pathname. AdminPage.tsx (served at /admin.html) and BattlePage.tsx (public app served at ROOT / by Amplify, NOT /index.html) both call the SAME loginUrl()/logoutUrl(). CDK registers callbackUrls/logoutUrls as `${adminAppBaseUrl}/admin.html` and `${adminAppBaseUrl}/index.html` plus localhost variants gated by includeLocalhostCallback context flag.",
+  "relevant_files": [
+    "frontend/src/auth.ts",
+    "frontend/src/pages/AdminPage.tsx",
+    "frontend/src/pages/BattlePage.tsx",
+    "lib/quiz-app-stack.ts",
+    "test/quiz-app-stack.test.ts",
+    "README.md"
+  ],
+  "directory_structure": "lib/ = CDK stack; lambda/ = handlers; test/ = jest CDK tests; frontend/ = Vite multi-page SPA (index.html at root, admin.html at /admin.html); frontend/src/pages/ = AdminPage.tsx & BattlePage.tsx; README.md = setup/deploy docs.",
+  "root_cause": "redirect_mismatch: the battle host lives in the public app which Amplify serves at the ROOT URL (window.location.pathname = '/'), so loginUrl() sends redirect_uri = origin + '/', but Cognito only trusts origin + '/index.html' and origin + '/admin.html'. Cognito requires an EXACT match, so it rejects '/'. Adding '/index.html' to the callback list does not help because the browser is at '/', not '/index.html'.",
+  "chosen_fix": "Option (a): canonicalize the public-app host redirect to the ROOT. auth.ts gets an explicit-redirect capability: admin page passes origin + '/admin.html'; battle host passes origin + '/' (canonical root, matching how Amplify serves the site). CDK registers `${adminAppBaseUrl}/admin.html` and `${adminAppBaseUrl}/` (dropping the never-matched '/index.html' and its localhost twin, keeping '/admin.html'), plus the corresponding localhost variants under includeLocalhostCallback. Both sides must match byte-for-byte; code comments on both sides call this out. captureTokenFromHash's history.replaceState may keep deriving its target from the live location (origin + pathname) since only the redirect_uri sent to Cognito must be the registered canonical string."
+}

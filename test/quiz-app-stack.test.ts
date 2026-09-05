@@ -162,6 +162,59 @@ describe('QuizAppStack', () => {
     template.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
   });
 
+  test('registers ROOT-canonicalized callback/logout URLs (no /index.html)', () => {
+    // Fix: the realtime battle HOST lives in the PUBLIC app, which Amplify
+    // serves at the ROOT, so the browser lands on `origin + '/'` after login.
+    // The Cognito app client must trust that exact ROOT URL (trailing slash,
+    // no '/index.html'), alongside the admin page's '/admin.html'. With the
+    // default `adminAppBaseUrl` (http://localhost:8080) and
+    // `includeLocalhostCallback` defaulting to true, the DECIDABLE localhost
+    // entries are literal strings we can assert on. This test would FAIL if
+    // the '/index.html' -> '/' change were reverted.
+    template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      CallbackURLs: Match.arrayWith([
+        'http://localhost:8080/admin.html',
+        'http://localhost:8080/',
+      ]),
+      LogoutURLs: Match.arrayWith([
+        'http://localhost:8080/admin.html',
+        'http://localhost:8080/',
+      ]),
+    });
+    // The never-matched '/index.html' entries must be gone from both lists.
+    template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      CallbackURLs: Match.not(
+        Match.arrayWith(['http://localhost:8080/index.html']),
+      ),
+      LogoutURLs: Match.not(
+        Match.arrayWith(['http://localhost:8080/index.html']),
+      ),
+    });
+  });
+
+  test('adminAppBaseUrl parameter rejects a trailing slash at deploy time', () => {
+    // Trailing-slash footgun guard: the callback/logout URLs are built by
+    // concatenating `${adminAppBaseUrl}` with `/admin.html` and `/`, so a
+    // base URL ending in `/` would yield a doubled slash (`//`) that breaks
+    // the exact redirect_uri match and reintroduces redirect_mismatch. Since
+    // `.valueAsString` is a synth-time token (a JS `.replace()` on it is a
+    // no-op), the footgun is closed at the source via the CfnParameter's
+    // AllowedPattern, which CloudFormation validates at deploy time. This
+    // test would FAIL if the AllowedPattern were removed or weakened.
+    const params = template.findParameters('adminAppBaseUrl');
+    expect(Object.keys(params)).toContain('adminAppBaseUrl');
+    const pattern = params.adminAppBaseUrl.AllowedPattern as string;
+    expect(typeof pattern).toBe('string');
+    const re = new RegExp(pattern);
+    // Valid: http(s) origins with NO trailing slash.
+    expect(re.test('http://localhost:8080')).toBe(true);
+    expect(re.test('https://main.d2uwsqpk41y7so.amplifyapp.com')).toBe(true);
+    // Invalid: a trailing slash (the footgun) or a missing scheme.
+    expect(re.test('https://main.d2uwsqpk41y7so.amplifyapp.com/')).toBe(false);
+    expect(re.test('http://localhost:8080/')).toBe(false);
+    expect(re.test('main.d2uwsqpk41y7so.amplifyapp.com')).toBe(false);
+  });
+
   test('defines a JWT authorizer for the admin route', () => {
     template.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
     template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
