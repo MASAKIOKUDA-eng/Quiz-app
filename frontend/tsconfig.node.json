@@ -1,16 +1,30 @@
 {
   "compilerOptions": {
     "composite": true,
-    // IMPORTANT: `noEmit: true` is REQUIRED here. This project only
-    // type-checks vite.config.ts; it must NOT emit JS. Without it, `tsc -b`
-    // (run by `npm run build` before `vite build`) compiles vite.config.ts to
-    // a CommonJS `vite.config.js`. Because frontend/package.json is
-    // `"type": "module"` (ESM), Vite then loads that emitted `vite.config.js`
-    // and throws `ReferenceError: exports is not defined in ES module scope`,
-    // breaking the build. `composite: true` + `noEmit: true` is valid on
-    // TypeScript 5.x and still lets `tsc -b` write its .tsbuildinfo. Do NOT
-    // remove noEmit.
-    "noEmit": true,
+    // This project ONLY type-checks vite.config.ts. It must not emit any
+    // JavaScript.
+    //
+    // Why not `noEmit: true`: tsconfig.json references this project
+    // (`references: [{ path: "./tsconfig.node.json" }]`), and TypeScript
+    // forbids a *referenced* (composite) project from disabling emit
+    // (error TS6310: "Referenced project ... may not disable emit"). So
+    // `noEmit` cannot be used here.
+    //
+    // Why `emitDeclarationOnly: true`: it satisfies the composite/reference
+    // requirement (emit is not disabled) while NOT producing any `.js`. This
+    // is critical: if `tsc -b` emitted `vite.config.js` (CommonJS) into this
+    // ESM package (frontend/package.json has "type": "module"), Vite would
+    // load that emitted config and throw
+    // `ReferenceError: exports is not defined in ES module scope`.
+    //
+    // The generated .d.ts and .tsbuildinfo are written to a throwaway,
+    // git-ignored directory (node_modules/.tmp) so they never pollute the
+    // source tree (which previously produced stray src/*.js / *.d.ts files).
+    // Do NOT switch this back to `noEmit`.
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "./node_modules/.tmp/tsconfig-node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig-node/tsconfig.node.tsbuildinfo",
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
