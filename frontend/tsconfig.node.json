@@ -1,6 +1,16 @@
 {
   "compilerOptions": {
     "composite": true,
+    // IMPORTANT: `noEmit: true` is REQUIRED here. This project only
+    // type-checks vite.config.ts; it must NOT emit JS. Without it, `tsc -b`
+    // (run by `npm run build` before `vite build`) compiles vite.config.ts to
+    // a CommonJS `vite.config.js`. Because frontend/package.json is
+    // `"type": "module"` (ESM), Vite then loads that emitted `vite.config.js`
+    // and throws `ReferenceError: exports is not defined in ES module scope`,
+    // breaking the build. `composite: true` + `noEmit: true` is valid on
+    // TypeScript 5.x and still lets `tsc -b` write its .tsbuildinfo. Do NOT
+    // remove noEmit.
+    "noEmit": true,
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
