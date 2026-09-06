@@ -401,17 +401,48 @@ export class QuizAppStack extends cdk.Stack {
       wsFunction,
     );
 
+    // -----------------------------------------------------------------
+    // WebSocket API + routes + autoDeploy stage: DETERMINISTIC DEPLOY.
+    //
+    // *** DO NOT "simplify" the wsStage.node.addDependency(route) loop
+    //     below away. It fixes a real, observed production outage. ***
+    //
+    // This is the classic API Gateway v2 WebSocket autoDeploy/route race.
+    // With `autoDeploy: true`, CloudFormation creates an implicit
+    // auto-deployment for the Stage, but it does NOT implicitly order that
+    // auto-deployment AFTER the AWS::ApiGatewayV2::Route resources. So the
+    // prod stage can be published with a MISSING or PARTIAL route set. When
+    // `$connect` in particular is not yet deployed to the stage, API Gateway
+    // DROPS the WebSocket handshake BEFORE integration: the browser sees
+    // `close code=1006` and NO `$connect` log ever reaches the ws Lambda
+    // (the Lambda is never invoked). That is exactly the realtime-battle
+    // "connection error" we hit on wss://.../prod.
+    //
+    // The deterministic fix: create the API WITHOUT the built-in
+    // connect/disconnect/default *RouteOptions, then create EVERY route
+    // (built-ins + custom actions) explicitly via `addRoute`, capturing each
+    // returned WebSocketRoute. After the routes exist, create the Stage and
+    // add an explicit CloudFormation dependency from the Stage to EVERY
+    // route. This forces the Stage (and its auto-deployment) to be
+    // created/updated only after all Route resources exist, so every
+    // `npx cdk deploy` publishes the FULL route set to the prod stage and no
+    // manual console "Deploy API" is ever needed.
+    // -----------------------------------------------------------------
     const wsApi = new apigwv2.WebSocketApi(this, 'QuizWebSocketApi', {
       description: 'Realtime quiz battle WebSocket API',
-      connectRouteOptions: { integration: wsIntegration },
-      disconnectRouteOptions: { integration: wsIntegration },
-      defaultRouteOptions: { integration: wsIntegration },
     });
 
-    // Custom battle action routes (matched on the JSON body `action` field
-    // via the WebSocket API's default route-selection expression
-    // `$request.body.action`).
-    for (const action of [
+    // All WebSocket routes, created explicitly so each yields a
+    // WebSocketRoute we can depend on. The three built-in keys
+    // ($connect/$disconnect/$default) share the SAME integration as the
+    // custom battle action routes (unchanged behavior: $connect returns 200,
+    // $default/actions dispatch to ws.ts). Custom action routes are matched
+    // on the JSON body `action` field via the WebSocket API's default
+    // route-selection expression `$request.body.action`.
+    const wsRouteKeys = [
+      '$connect',
+      '$disconnect',
+      '$default',
       'createRoom',
       'reattachRoom',
       'joinRoom',
@@ -419,8 +450,10 @@ export class QuizAppStack extends cdk.Stack {
       'submitAnswer',
       'nextQuestion',
       'endGame',
-    ]) {
-      wsApi.addRoute(action, { integration: wsIntegration });
+    ];
+    const wsRoutes: apigwv2.WebSocketRoute[] = [];
+    for (const routeKey of wsRouteKeys) {
+      wsRoutes.push(wsApi.addRoute(routeKey, { integration: wsIntegration }));
     }
 
     const wsStage = new apigwv2.WebSocketStage(this, 'QuizWebSocketStage', {
@@ -428,6 +461,15 @@ export class QuizAppStack extends cdk.Stack {
       stageName: 'prod',
       autoDeploy: true,
     });
+
+    // Explicit CloudFormation dependency: the auto-deploying Stage must be
+    // created/updated only after EVERY Route resource exists. Without this,
+    // the autoDeploy publishes before the routes and the prod stage serves a
+    // missing/partial route set -> $connect not deployed -> handshake dropped
+    // -> browser close code=1006 and no $connect log. DO NOT REMOVE.
+    for (const route of wsRoutes) {
+      wsStage.node.addDependency(route);
+    }
 
     // Let the WebSocket Lambda call the API Gateway Management API
     // (PostToConnection) to push state to connected clients.

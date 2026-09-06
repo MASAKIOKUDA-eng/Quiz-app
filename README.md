@@ -380,6 +380,20 @@ curl -i -X POST "<ApiEndpoint>/api/admin/quizzes" \
    - `WS_URL` = `WebSocketEndpoint` → `VITE_WS_URL`（リアルタイム対戦の WebSocket 接続先）
      （例: `wss://xxxx.execute-api.<region>.amazonaws.com/prod`）
    これらの環境変数名は `amplify.yml` が参照する名前と一致している必要があります。
+
+   > **WebSocket（リアルタイム対戦）の接続エラー（close code=1006）を直す再デプロイ:**
+   > 以前は API Gateway v2 WebSocket の autoDeploy とルート作成の競合により、`prod`
+   > ステージが全ルート（特に `$connect`）を含まないまま公開されることがありました。その場合
+   > ブラウザは `wss://.../prod` への接続が close code=1006 で失敗し、`$connect` のログも
+   > ws Lambda に届きません（API Gateway が統合前にハンドシェイクを破棄するため）。CDK 側で
+   > ステージから全ルートへ明示的な CloudFormation 依存関係を張るよう修正したので、以降は
+   > **`npx cdk deploy` を実行するたびに `$connect`/`$disconnect`/`$default` と 7 つの
+   > アクションルートすべてが自動的に `prod` ステージへデプロイ**されます。本修正を取り込んだら、
+   > バックエンドを **`npx cdk deploy` で再デプロイ**してください。これで `prod` ステージが全
+   > ルートを取り込み、リアルタイム対戦の close code=1006 / 接続エラーが解消します。すぐに
+   > 復旧させたい場合は、API Gateway コンソールで対象 WebSocket API を一度だけ手動 **「Deploy
+   > API」**（デプロイ先ステージ `prod`）すれば暫定回避できますが、恒久対応は上記の CDK 再デプロイです。
+
    フロントエンドは Vite のマルチページビルドで、公開アプリ（`/index.html`）と管理者
    ページ（`/admin.html`）の 2 つを**実体のある静的ファイル**として出力します。どちらも
    実ファイルなので、**SPA 用の書き換えルール（全パスを `/index.html` にリライト）は不要**です。

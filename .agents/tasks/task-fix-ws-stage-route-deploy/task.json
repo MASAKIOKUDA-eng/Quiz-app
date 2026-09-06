@@ -1,0 +1,14 @@
+{
+  "task_id": "task-fix-ws-stage-route-deploy",
+  "task_description": "Fix the realtime-battle 'connection error': the API Gateway v2 WebSocket wss://.../prod handshake fails with close code=1006 and no $connect log reaches the ws Lambda because the autoDeploy WebSocketStage is published before/without its routes (the classic apigwv2 autoDeploy/route race). Make the CDK deterministic so every WebSocket route ($connect, $disconnect, $default, and the 7 custom actions) is present in the deployed prod stage on every `npx cdk deploy`, via an explicit CloudFormation dependency from the stage to all routes. Update the test to assert the dependency and add a short README deploy note. Do not change lambda/ws.ts or the frontend.",
+  "status": "completed",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null,
+  "verification": {
+    "build": "skipped",
+    "tests": "skipped",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "INTEGRATIONS_ONLY sandbox: node_modules absent and npm registry 403, so tsc/jest/cdk synth could not run. Fix authored correct-by-construction against aws-cdk-lib 2.156 (WebSocketApi with no *RouteOptions; all 10 routes via addRoute capturing each WebSocketRoute; wsStage.node.addDependency(route) per route) and verified by reading the diff and reasoning about the synthesized CloudFormation graph: each WebSocketRoute emits an AWS::ApiGatewayV2::Route and addDependency emits DependsOn on the AWS::ApiGatewayV2::Stage for every route, so the autoDeploy stage is ordered after all routes and always publishes the full route set. The new test derives WS route logical IDs from findResources (not hardcoded) and asserts the prod Stage DependsOn contains every one; it would fail if the addDependency wiring were reverted, and it exercises the changed code path directly (test_quality pass). The user must run npm ci && npm run build && npm test && npx cdk synth && npx cdk deploy on a networked host to fully verify and resolve the close code=1006 failure."
+  }
+}
