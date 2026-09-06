@@ -23,5 +23,12 @@
     "strictPropertyInitialization": false,
     "typeRoots": ["./node_modules/@types"]
   },
-  "exclude": ["node_modules", "cdk.out"]
+  // NOTE: `frontend/` is a SEPARATE TypeScript project (React + Vite, with its
+  // own frontend/tsconfig.json using jsx + the DOM lib). It is built
+  // independently via `cd frontend && npm run build`. It is intentionally
+  // excluded here so the root backend build (`tsc` over bin/, lib/, lambda/)
+  // does NOT traverse frontend/** — otherwise the Node-oriented root config
+  // (no `jsx`, no DOM lib) would report hundreds of JSX/DOM errors and even
+  // descend into frontend/node_modules. Do not remove "frontend" from exclude.
+  "exclude": ["node_modules", "cdk.out", "frontend"]
 }
