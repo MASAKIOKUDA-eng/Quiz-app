@@ -1,0 +1,7 @@
+{
+  "task_id": "task-fix-ws-stage-route-deploy",
+  "task_description": "Fix the realtime-battle 'connection error': the API Gateway v2 WebSocket wss://.../prod handshake fails with close code=1006 and no $connect log reaches the ws Lambda because the autoDeploy WebSocketStage is published before/without its routes (the classic apigwv2 autoDeploy/route race). Make the CDK deterministic so every WebSocket route ($connect, $disconnect, $default, and the 7 custom actions) is present in the deployed prod stage on every `npx cdk deploy`, via an explicit CloudFormation dependency from the stage to all routes. Update the test to assert the dependency and add a short README deploy note. Do not change lambda/ws.ts or the frontend.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001"],
+  "blocked_reason": null
+}

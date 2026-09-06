@@ -127,6 +127,61 @@ describe('QuizAppStack', () => {
     });
   });
 
+  test('the WebSocket stage DependsOn EVERY WebSocket route (deterministic autoDeploy)', () => {
+    // Fix: the API Gateway v2 WebSocket autoDeploy/route race. With
+    // `autoDeploy: true`, CloudFormation does NOT implicitly order the
+    // Stage's auto-deployment after the Route resources, so the prod stage
+    // could be published with a missing/partial route set -> $connect not
+    // deployed -> handshake dropped at API Gateway -> browser close
+    // code=1006 and no $connect log in the ws Lambda. The stack adds an
+    // explicit `wsStage.node.addDependency(route)` for every route, which
+    // synthesizes a DependsOn on the AWS::ApiGatewayV2::Stage listing all
+    // WebSocket route logical IDs. This test derives those logical IDs from
+    // the template (never hardcoded) and would FAIL if the addDependency
+    // wiring were reverted.
+    const wsRouteKeys = [
+      '$connect',
+      '$disconnect',
+      '$default',
+      'createRoom',
+      'reattachRoom',
+      'joinRoom',
+      'startGame',
+      'submitAnswer',
+      'nextQuestion',
+      'endGame',
+    ];
+
+    // Collect the logical IDs of the WebSocket Route resources (those whose
+    // RouteKey is one of the WS keys, i.e. NOT the '/api/...' HTTP routes).
+    const allRoutes = template.findResources('AWS::ApiGatewayV2::Route');
+    const wsRouteLogicalIds = Object.entries(allRoutes)
+      .filter(([, r]) => {
+        const rk = r.Properties?.RouteKey;
+        return typeof rk === 'string' && wsRouteKeys.includes(rk);
+      })
+      .map(([logicalId]) => logicalId);
+
+    // Sanity: all ten WS routes are present.
+    expect(wsRouteLogicalIds).toHaveLength(wsRouteKeys.length);
+
+    // There is exactly one WebSocket stage; find it and read its DependsOn.
+    const stages = template.findResources('AWS::ApiGatewayV2::Stage');
+    const stageEntries = Object.entries(stages).filter(
+      ([, s]) => s.Properties?.StageName === 'prod',
+    );
+    expect(stageEntries).toHaveLength(1);
+    const [, wsStageResource] = stageEntries[0];
+
+    const dependsOn = wsStageResource.DependsOn as string[] | undefined;
+    expect(Array.isArray(dependsOn)).toBe(true);
+
+    // The Stage must DependsOn EVERY WebSocket route logical ID.
+    for (const routeLogicalId of wsRouteLogicalIds) {
+      expect(dependsOn).toContain(routeLogicalId);
+    }
+  });
+
   test('the WebSocket Lambda role can call execute-api ManageConnections', () => {
     // grantManageConnections attaches an IAM policy allowing the
     // execute-api:ManageConnections action for the @connections endpoint.

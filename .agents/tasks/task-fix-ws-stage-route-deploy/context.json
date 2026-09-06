@@ -1,0 +1,21 @@
+{
+  "project_type": "AWS CDK v2 (TypeScript) serverless quiz application: DynamoDB single-table, two ARM64 Lambdas behind an API Gateway v2 HTTP API and a v2 WebSocket API, Cognito admin auth, Amplify Hosting frontend.",
+  "language": "TypeScript",
+  "build_system": "npm + tsc (build) + jest/ts-jest (test) + aws-cdk (synth/deploy). aws-cdk-lib ^2.156.0, constructs ^10.3.0.",
+  "test_framework": "jest with ts-jest; single suite test/quiz-app-stack.test.ts using aws-cdk-lib/assertions (Template.fromStack, Match). Synth runs esbuild for NodejsFunction bundling (needs network for the very first install, then local esbuild dependency).",
+  "build_command": "npm run build (tsc). Full local verify on the user's networked host: npm ci && npm run build && npm test && npx cdk synth.",
+  "test_command": "npm test (jest)",
+  "verification_instructions": "In this sandbox (INTEGRATIONS_ONLY) npm/tsc/jest/cdk cannot run because node_modules is not installed and the npm registry returns 403. Verify by reading the code and reasoning about the synthesized CloudFormation dependency graph. The user runs npm ci && npm run build && npm test && npx cdk synth then npx cdk deploy on their networked host. After deploy, the prod stage will contain every WS route and the wss://.../prod $connect handshake succeeds (no more close code=1006; a $connect log appears in the ws Lambda CloudWatch log group).",
+  "snapshot_or_generated_files": "None checked in. Synth output (cdk.out) is generated locally and not committed.",
+  "setup_instructions": "npm ci (installs aws-cdk-lib, constructs, jest, ts-jest, esbuild, typescript). Requires network access to the npm registry, which is unavailable in this sandbox.",
+  "environment_constraints": "Network mode INTEGRATIONS_ONLY: npm registry returns 403; node_modules is NOT installed. npm install / tsc / jest / cdk synth / cdk deploy CANNOT run in the sandbox. Author correct-by-construction and verify by reading and by reasoning about the CloudFormation dependency graph. Do NOT push and do NOT open a PR (orchestrator publishes). Commit onto the current branch fix/ws-stage-route-deploy.",
+  "contribution_requirements": "Keep the fix minimal and well-commented. Do NOT change lambda/ws.ts (correct) or the frontend. No dependency changes, no lockfile changes. Preserve: ws Lambda integration, grantManageConnections, the full route set, the prod stage name, the WebSocketEndpoint CfnOutput, the HTTP API, Cognito, DynamoDB, Amplify notes.",
+  "key_patterns": "aws-cdk-lib 2.156 API: apigwv2.WebSocketApi(scope,id,{connectRouteOptions,disconnectRouteOptions,defaultRouteOptions}) creates built-in $connect/$disconnect/$default routes internally; wsApi.addRoute(routeKey, {integration}) returns a WebSocketRoute construct (has .node) for custom action routes. apigwv2.WebSocketStage(scope,id,{webSocketApi,stageName,autoDeploy:true}) synthesizes AWS::ApiGatewayV2::Stage with AutoDeploy=true. CloudFormation does NOT auto-create a dependency from the auto-deploying Stage to the Route resources, so the auto-deployment can precede the routes and serve an empty/partial route set -> $connect not deployed -> API Gateway drops the handshake -> client sees close code=1006 and the Lambda is never invoked. Tests use Template.fromStack + Match and assert on resource types/RouteKeys, never on generated logical IDs.",
+  "relevant_files": [
+    "lib/quiz-app-stack.ts (the ONLY implementation file to change: the WebSocket API/stage block near section (c.2))",
+    "test/quiz-app-stack.test.ts (assert routes + stage->route dependency; keep existing WS assertions passing)",
+    "lambda/ws.ts (DO NOT change; $connect returns {statusCode:200} and does not authorize/deny; confirms the bug is not in the Lambda)",
+    "README.md (add a short deploy note about re-running npx cdk deploy and the one-time console 'Deploy API' workaround)"
+  ],
+  "directory_structure": "lib/ (CDK stack), lambda/ (index.ts HTTP handler, ws.ts WebSocket handler), frontend/src/ (SPA incl. ws.ts client), test/ (jest suite), bin/ (CDK app entry), .agents/tasks/ (task state)."
+}
